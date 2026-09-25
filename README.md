@@ -117,6 +117,11 @@ must all be rejected. Any Python 3 can run the harness; it only shells out to NX
 
 Stated plainly, because the honest scope is more useful than an optimistic one:
 
+- **It cannot read a drawing.** The code's input is numbers; interpreting a drawing, photo or
+  screenshot is the *agent's* job. `skills/nx-model/SKILL.md` documents the discipline for that
+  (transcribe → confirm with the user → build) and, importantly, why the numeric verification **cannot
+  catch a misread dimension**: it compares NX's measurement against a value derived from the same
+  spec, so a wrong number moves both sides together and the run stays green.
 - **No drafting.** No drawing sheets, projected views, annotations, PDF or DWG.
 - **Only one part recipe.** `plate_metrics()` / `validate_plate()` are specific to the mounting-plate
   geometry. Adding a part type means adding both its geometry formula and its validation rules, or
