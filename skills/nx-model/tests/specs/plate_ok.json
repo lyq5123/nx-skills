@@ -1,0 +1,10 @@
+{
+  "part_name": "plate_ok",
+  "out_dir": "~/nx_out",
+  "part": "mounting_plate",
+  "params": {
+    "plate_w": 200.0, "plate_h": 100.0, "plate_t": 12.0,
+    "hole_d": 9.0, "hole_inset": 20.0,
+    "bore_d": 40.0, "fillet_r": 8.0
+  }
+}

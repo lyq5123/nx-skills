@@ -1,0 +1,6 @@
+{
+  "part_name": "bad_fillet_hole",
+  "out_dir": "~/nx_out",
+  "params": { "plate_w": 120.0, "plate_h": 80.0, "plate_t": 10.0,
+              "hole_d": 9.0, "hole_inset": 6.0, "bore_d": 30.0, "fillet_r": 14.0 }
+}

@@ -1,0 +1,32 @@
+# ---- build / run artifacts from the nx-model journals --------------------
+# The skill writes these next to the part; never commit them.
+out/
+tmp/
+*.prt
+*.step
+*.stp
+*.run.log
+*.result.json
+*.verify.result.json
+ugstep214.log
+
+# STEP translator sidecar logs land next to the .step, named after the part
+skills/nx-model/tests/out/
+skills/nx-model/tests/tmp/
+
+# ---- python ---------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+.python-version
+
+# ---- editors / OS ---------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini

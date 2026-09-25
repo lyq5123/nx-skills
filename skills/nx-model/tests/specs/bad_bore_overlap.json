@@ -1,0 +1,6 @@
+{
+  "part_name": "bad_bore_overlap",
+  "out_dir": "~/nx_out",
+  "params": { "plate_w": 120.0, "plate_h": 80.0, "plate_t": 10.0,
+              "hole_d": 20.0, "hole_inset": 30.0, "bore_d": 60.0, "fillet_r": 0.0 }
+}

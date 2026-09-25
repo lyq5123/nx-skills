@@ -1,0 +1,13 @@
+# Normalise line endings in the repository so contributors on other platforms do
+# not produce spurious whole-file diffs on every commit.
+* text=auto eol=lf
+
+# Windows-only paths where CRLF is genuinely expected
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+*.ps1  text eol=crlf
+
+# Binary / generated - never diff these
+*.prt   binary
+*.step  binary
+*.stp   binary
