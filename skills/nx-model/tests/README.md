@@ -24,7 +24,7 @@ product's default `out_dir`.
 | T6 | A missing spec path and a malformed JSON spec both fail with a clear message rather than a traceback. |
 | T7 | The exported STEP contains a `MANIFOLD_SOLID_BREP`, not just a plausible file. |
 | T8 | The recipe rules and analytic formulas, in 0.01 s and with no NX involved. |
-| T9 | **Every registered shape** - flange and bracket - builds a correct solid and passes the independent verifier. |
+| T9 | **Every registered shape** - flange, bracket and the generic profile - builds a correct solid and passes the independent verifier. |
 
 ## Layout
 
@@ -36,6 +36,7 @@ tests/
     plate_ok.json          valid, deliberately non-default dimensions
     flange_ok.json         valid flange, non-default
     bracket_ok.json        valid bracket, non-default
+    profile_ok.json        valid generic outline (a hexagon), non-default
     bad_hole_outside.json  hole breaks through the plate edge
     bad_hole_centreline.json  holes at the centreline -> the four coincide
     bad_bore_overlap.json  bore overlaps the corner holes

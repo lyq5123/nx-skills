@@ -77,6 +77,8 @@ def _verify(spec, params, p, log, result):
 
     if not os.path.isfile(p["prt"]):
         log.err("part not found: %s" % p["prt"])
+        log.info("       this verifier fell back to its default spec. Pass the SAME spec")
+        log.info("       the build used:  verify_part.py -args my_spec.json")
         return
 
     part, _status = session.Parts.OpenBaseDisplay(p["prt"])

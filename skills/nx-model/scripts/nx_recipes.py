@@ -425,3 +425,201 @@ register(BRACKET,
          bracket_metrics,
          bracket_cylindrical_faces,
          aliases=("bracket", "l-bracket"))
+
+
+# -----------------------------------------------------------------------------
+# recipe: extruded_profile
+#
+# ANY straight-sided part: a closed polygon extruded to a thickness, with circular
+# holes through it. This is the shape to reach for when a drawing is not one of the
+# named parts - most plate-like components (brackets, covers, gussets, channels,
+# link plates) are exactly this, and the volume is exact:
+#
+#     |shoelace area of the polygon| * thickness  -  sum(pi * r^2 * thickness)
+#
+# Unlinke the named recipes, params here are STRUCTURED:
+#     "points": [[x, y], ...]        the closed outline, in order (at least 3)
+#     "thickness": number            extrusion depth
+#     "holes":  [[x, y, dia], ...]   optional through-holes
+#
+# The polygon is taken as closed - do not repeat the first point at the end.
+# Straight edges only: an arc in the outline needs a named recipe with its own
+# analytic formula (a circle is not a polygon).
+# -----------------------------------------------------------------------------
+PROFILE = "extruded_profile"
+PROFILE_PARAM_KEYS = ("points", "thickness", "holes")
+
+
+def _as_point(value, what):
+    """Validate one [x, y] pair, returning (x, y) or raising ValueError."""
+    if not isinstance(value, (list, tuple)) or len(value) != 2:
+        raise ValueError("%s must be [x, y], got %r" % (what, value))
+    out = []
+    for c in value:
+        if isinstance(c, bool) or not isinstance(c, (int, float)):
+            raise ValueError("%s must be numbers, got %r" % (what, value))
+        out.append(float(c))
+    return out[0], out[1]
+
+
+def _shoelace(points):
+    """Signed area of a closed polygon (positive = counter-clockwise)."""
+    total = 0.0
+    n = len(points)
+    for i in range(n):
+        x0, y0 = points[i]
+        x1, y1 = points[(i + 1) % n]
+        total += x0 * y1 - x1 * y0
+    return total / 2.0
+
+
+def _point_in_polygon(pt, points):
+    """Ray casting - True when the point is strictly inside."""
+    x, y = pt
+    inside = False
+    n = len(points)
+    for i in range(n):
+        x0, y0 = points[i]
+        x1, y1 = points[(i + 1) % n]
+        if (y0 > y) != (y1 > y):
+            xin = x0 + (y - y0) * (x1 - x0) / (y1 - y0)
+            if x < xin:
+                inside = not inside
+    return inside
+
+
+def _distance_to_polygon_edge(pt, points):
+    """Shortest distance from a point to any edge of the polygon."""
+    px, py = pt
+    best = float("inf")
+    n = len(points)
+    for i in range(n):
+        x0, y0 = points[i]
+        x1, y1 = points[(i + 1) % n]
+        dx, dy = x1 - x0, y1 - y0
+        seg2 = dx * dx + dy * dy
+        if seg2 <= 0.0:
+            t = 0.0
+        else:
+            t = max(0.0, min(1.0, ((px - x0) * dx + (py - y0) * dy) / seg2))
+        d = math.hypot(px - (x0 + t * dx), py - (y0 + t * dy))
+        if d < best:
+            best = d
+    return best
+
+
+def profile_validate(params):
+    """Validate a structured spec. Returns human-readable problems."""
+    raw_points = params.get("points")
+    thickness = params.get("thickness")
+    raw_holes = params.get("holes") or []
+
+    if raw_points is None:
+        return ["missing parameter 'points' - the closed outline as [[x, y], ...]"]
+    if not isinstance(raw_points, (list, tuple)):
+        return ["'points' must be a list of [x, y] pairs, got %s"
+                % type(raw_points).__name__]
+    if thickness is None:
+        return ["missing parameter 'thickness' (the extrusion depth, mm)"]
+    bad = []
+    if isinstance(thickness, bool) or not isinstance(thickness, (int, float)):
+        bad.append("'thickness' must be a number, got %r" % (thickness,))
+    elif thickness <= 0:
+        bad.append("'thickness' must be > 0, got %s" % thickness)
+
+    if len(raw_points) < 3:
+        bad.append("'points' needs at least 3 pairs to enclose an area, got %d"
+                   % len(raw_points))
+    points = []
+    for i, pv in enumerate(raw_points):
+        try:
+            points.append(_as_point(pv, "points[%d]" % i))
+        except ValueError as exc:
+            bad.append(str(exc))
+    if bad:
+        return bad
+
+    n = len(points)
+    for i in range(n):
+        if points[i] == points[(i + 1) % n]:
+            bad.append("points[%d] and points[%d] are the same point - the outline "
+                       "has a zero-length edge" % (i, (i + 1) % n))
+            break
+    area = _shoelace(points)
+    if abs(area) < 1e-9:
+        bad.append("the outline encloses no area (shoelace area ~ 0) - the points "
+                   "are probably collinear")
+
+    holes = []
+    if not isinstance(raw_holes, (list, tuple)):
+        bad.append("'holes' must be a list of [x, y, dia], got %s"
+                   % type(raw_holes).__name__)
+    else:
+        for i, hv in enumerate(raw_holes):
+            if not isinstance(hv, (list, tuple)) or len(hv) != 3:
+                bad.append("holes[%d] must be [x, y, dia], got %r" % (i, hv))
+                continue
+            try:
+                hx, hy = _as_point(hv[:2], "holes[%d]" % i)
+            except ValueError as exc:
+                bad.append(str(exc))
+                continue
+            dia = hv[2]
+            if isinstance(dia, bool) or not isinstance(dia, (int, float)):
+                bad.append("holes[%d] diameter must be a number, got %r" % (i, dia))
+                continue
+            if dia <= 0:
+                bad.append("holes[%d] diameter must be > 0, got %s" % (i, dia))
+                continue
+            holes.append((hx, hy, float(dia)))
+    if bad:
+        return bad
+
+    for i, (hx, hy, dia) in enumerate(holes):
+        if not _point_in_polygon((hx, hy), points):
+            bad.append("hole %d at (%.3f, %.3f) is outside the outline" % (i, hx, hy))
+            continue
+        gap = _distance_to_polygon_edge((hx, hy), points)
+        if gap <= dia / 2.0:
+            bad.append("hole %d at (%.3f, %.3f) crosses the outline: it is %.3f from "
+                       "the nearest edge but its radius is %.3f"
+                       % (i, hx, hy, gap, dia / 2.0))
+    if not bad:
+        for i in range(len(holes)):
+            for j in range(i + 1, len(holes)):
+                ax, ay, ad = holes[i]
+                bx, by, bd = holes[j]
+                if math.hypot(ax - bx, ay - by) <= ad / 2.0 + bd / 2.0:
+                    bad.append("holes %d and %d overlap (centres %.3f apart, radii "
+                               "%.3f + %.3f)" % (i, j, math.hypot(ax - bx, ay - by),
+                                                 ad / 2.0, bd / 2.0))
+    return bad
+
+
+def profile_metrics(params):
+    points = [_as_point(p, "point") for p in params["points"]]
+    thickness = params["thickness"]
+    holes = [_as_point(h[:2], "hole") + (float(h[2]),)
+             for h in (params.get("holes") or [])]
+
+    area = abs(_shoelace(points))
+    vol = area * thickness
+    # one side face per edge, plus the two end faces
+    faces = len(points) + 2
+    for _hx, _hy, dia in holes:
+        if dia > 0:
+            vol -= math.pi * (dia / 2.0) ** 2 * thickness
+            faces += 1
+    return vol, faces
+
+
+def profile_cylindrical_faces(params):
+    return len([h for h in (params.get("holes") or []) if float(h[2]) > 0])
+
+
+register(PROFILE,
+         PROFILE_PARAM_KEYS,
+         profile_validate,
+         profile_metrics,
+         profile_cylindrical_faces,
+         aliases=("profile", "extrude"))

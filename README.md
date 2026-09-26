@@ -118,6 +118,14 @@ build; the numbers are what the tests assert.
 | `mounting_plate` (default) | `plate_w` `plate_h` `plate_t` `hole_d` `hole_inset` `bore_d` `fillet_r` | 120×80×10, 4× D6.6, D30 bore → 87562.939 mm³, 11 faces; with R8 corner fillets → 87013.558, 15 faces |
 | `circular_flange` (`flange`) | `od` `id` `thk` `bcd` `n_bolts` `bolt_d` `chamfer` | OD160 / ID60 / t20 / BCD120 / 6× D14 / C2 → 325108.763 mm³, 12 faces, 8 cylinders + 2 cones |
 | `l_bracket` (`bracket`) | `base_l` `base_t` `wall_t` `total_h` `width` `hole_d` `hole_inset_x` | 80/12/10/60 wide 40, 2× D6 → 55338.053 mm³, 10 faces |
+| `extruded_profile` (`profile`) | **any straight-sided outline**: `points` `[[x,y],…]`, `thickness`, `holes` `[[x,y,dia],…]` | a hexagon 100/140/80 wide 6 with 2× D12 → 65842.832 mm³, 10 faces |
+
+`extruded_profile` is the general-purpose one: most flat components on a drawing — brackets, covers,
+gussets, link plates, channels — have a straight-edged outline, and it reproduces the named recipes
+exactly when their outline is written as points (there is a test asserting that). What it cannot do is
+a **curved outline** (a radius on the outside, an arc, a slot, a keyway — a circle is not a polygon),
+a **revolved** part, or anything that is **not a constant-thickness extrusion** (step, pocket, boss,
+shell, draft).
 
 Each shape has its own builder (`build_plate.py`, `build_flange.py`, `build_bracket.py`) and its own
 entry in `nx_recipes.py` holding three things: the parameters it takes, the rules that reject bad
@@ -148,11 +156,12 @@ Stated plainly, because the honest scope is more useful than an optimistic one:
   catch a misread dimension**: it compares NX's measurement against a value derived from the same
   spec, so a wrong number moves both sides together and the run stays green.
 - **No drafting.** No drawing sheets, projected views, annotations, PDF or DWG.
-- **Three part shapes, and you pay per shape.** The registry covers a rectangular plate, a circular
-  flange and an L bracket (see [Shapes](#shapes) below). Anything else — a turned part, a pocket, a
-  step, a slot — is not buildable until someone adds a recipe: its geometry formula, its validation
-  rules and a builder. The analytic formula matters as much as the geometry, because the verifier
-  compares against it; a recipe with a wrong formula fails its own build.
+- **Four shapes, one of them general.** The registry covers a rectangular plate, a circular flange,
+  an L bracket, and `extruded_profile` — any straight-sided outline extruded to a thickness (see
+  [Shapes](#shapes) below). That last one covers most flat parts. Outside it: curved outlines,
+  revolved parts, and anything that is not a constant-thickness extrusion. Those need a new recipe —
+  geometry formula, validation rules, builder — and the formula matters as much as the geometry,
+  because the verifier compares against it; a recipe with a wrong formula fails its own build.
 - **`nx-gui` cannot reach menus.** Pull-down menus, dropdown contents and graphics-area filter bars
   are invisible to both screenshots and accessibility on NX 2406, so commands behind them have to be
   done by hand. Selecting an existing sketch's curves as an extrude section is unsolved; the

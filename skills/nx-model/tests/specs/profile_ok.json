@@ -1,0 +1,10 @@
+{
+  "part_name": "profile_ok",
+  "out_dir": "~/nx_out",
+  "part": "extruded_profile",
+  "params": {
+    "points": [[0, 0], [100, 0], [140, 40], [100, 80], [0, 80], [-40, 40]],
+    "thickness": 6.0,
+    "holes": [[20, 40, 12.0], [80, 40, 12.0]]
+  }
+}

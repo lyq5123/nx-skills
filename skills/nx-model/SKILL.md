@@ -87,8 +87,13 @@ A spec is a JSON object. Copy `tests/specs/plate_ok.json` as a starting point:
 ```
 
 - **`part`** picks the shape: `mounting_plate` (the default when omitted), `circular_flange`
-  (`flange`), or `l_bracket` (`bracket`). Each takes a different set of `params` - see the table under
-  "Building from a drawing" above, and each has its own builder journal.
+  (`flange`), `l_bracket` (`bracket`), or `extruded_profile` (`profile`). Each takes a different set
+  of `params` - see the tables under "Building from a drawing" above - and each has its own builder.
+- **`extruded_profile` takes structured params**, not scalars:
+  `"points": [[x, y], ...]` (the closed outline, at least 3 pairs, **do not repeat the first point**),
+  `"thickness": number`, `"holes": [[x, y, dia], ...]` (optional). The outline is straight-edged only,
+  and the validator rejects self-intersecting outlines, holes outside the outline, holes crossing an
+  edge, and overlapping holes.
 - **Any subset of `params` may be given**; omitted keys fall back to the journal's built-in defaults.
 - `params` must be numbers, not strings. `"plate_w": "200"` is rejected.
 - Set a feature off with `0`: `hole_d: 0` skips the corner holes, `bore_d: 0` skips the bore,
@@ -146,9 +151,11 @@ These catch a real share of misreads, and they are free:
 - **Never scale off the pixels.** Printed dimensions only. A photo's pixel measurements mean nothing
   without a known scale and an undistorted view.
 
-### If the drawing is not a supported shape, say so first
+### Which shape, and when to say you cannot build it
 
-This skill has three geometry recipes, all in `nx_recipes.py`:
+Read this before transcribing, because it decides whether the job is even possible.
+
+**Named recipes** (in `nx_recipes.py`) - convenient parameter names and shape-specific rules:
 
 | `part` | Shape | Parameters |
 | --- | --- | --- |
@@ -156,10 +163,29 @@ This skill has three geometry recipes, all in `nx_recipes.py`:
 | `circular_flange` (`flange`) | disc, centre bore, bolt circle, rim chamfers | `od` `id` `thk` `bcd` `n_bolts` `bolt_d` `chamfer` |
 | `l_bracket` (`bracket`) | L profile extruded, two through-holes | `base_l` `base_t` `wall_t` `total_h` `width` `hole_d` `hole_inset_x` |
 
-If the drawing is none of these - a turned part, anything with a pocket, step or slot, a third hole
-pattern - **stop and say so before doing any work**: no amount of careful transcription will build it.
-Adding a shape means adding a recipe (geometry formula, validation rules) plus a builder journal that
-calls `nx_journal.run()`; the existing journals do not change.
+**And then the general one, which is the usual answer:**
+
+| `part` | Shape | Parameters |
+| --- | --- | --- |
+| `extruded_profile` (`profile`) | **any straight-sided outline** extruded to a thickness, with through-holes | `points` = `[[x,y], ...]` closed outline, `thickness`, `holes` = `[[x,y,dia], ...]` |
+
+`extruded_profile` covers most flat components on a drawing - brackets, covers, gussets, link plates,
+channels, gaskets, anything whose outline is straight lines. Its volume is exact (shoelace area ×
+thickness − hole cylinders), so it gets the same verification as everything else, and it reproduces
+the named recipes exactly when their outline is written as points (there is a test asserting that).
+
+**Say you cannot build it, before doing any work, when the part is:**
+
+- **curved in outline** - a radius on the outside, an arc, a slot, a keyway. The profile is
+  straight-edged only; a circle is not a polygon. (Holes are fine - they may be circular.)
+- **revolved** - a shaft, bushing, or anything drawn as a lathe part. No recipe, and its volume needs
+  a different formula.
+- **not a constant-thickness extrusion** - a step, a pocket, a boss, a shell, a draft.
+- **threaded, splined, geared, or heat-treated in ways the model must show.**
+
+Adding one of those means writing a recipe (geometry formula + validation rules) plus a builder that
+calls `nx_journal.run()` - not editing the existing journals. It is a real task, not a config change;
+say so instead of attempting it silently.
 
 ### When reporting a finished part
 
@@ -325,7 +351,8 @@ logical step.
 | `scripts/nx_recipes.py` | **the per-shape rules**: parameters, validation, analytic volume and face counts (plain Python) |
 | `scripts/nx_journal.py` | the NX-side plumbing every builder shares: session, extrude/blend/chamfer, self-check, save, STEP export |
 | `scripts/build_plate.py` | the plate builder - geometry only; copy it to start a new shape |
-| `scripts/build_flange.py` / `build_bracket.py` | the other two shapes |
+| `scripts/build_flange.py` / `build_bracket.py` | the other two named shapes |
+| `scripts/build_profile.py` | the generic one: any straight-sided outline, extruded |
 | `scripts/verify_part.py` | measuring a finished part against its spec, whatever shape it is |
 | `scripts/show_in_nx.py` | opening the built part in the user's NX (plain Python, not a journal) |
 | `scripts/check_step.py` | proving a STEP export actually contains geometry |

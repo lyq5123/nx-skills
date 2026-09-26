@@ -255,10 +255,14 @@ def T9_other_shapes_build_and_verify():
     """
     for fixture, name, exp_vol, exp_faces in (
             ("flange_ok.json", "t9_flange", 631516.672039, 14),
-            ("bracket_ok.json", "t9_bracket", 128638.274876, 10)):
+            ("bracket_ok.json", "t9_bracket", 128638.274876, 10),
+            ("profile_ok.json", "t9_profile", 65842.831974, 10)):
         spec = spec_path(fixture, name=name)
         reset_result(name)
-        rc, out = run("build_%s.py" % name.split("_")[1], [spec])
+        journal = {"t9_flange": "build_flange.py",
+                   "t9_bracket": "build_bracket.py",
+                   "t9_profile": "build_profile.py"}[name]
+        rc, out = run(journal, [spec])
         check(rc == 0, "%s: build exit %d\n%s" % (name, rc, out[-900:]))
         r = result_of(name)
         check(r is not None and r["status"] == "ok",
@@ -289,7 +293,7 @@ TESTS = [
     ("T6", "missing / malformed spec files and stray options fail clearly", T6_missing_and_malformed_spec),
     ("T7", "exported STEP contains real geometry", T7_step_contains_geometry),
     ("T8", "part-recipe unit tests (no NX needed)", T8_recipe_unit_tests),
-    ("T9", "flange and bracket build and verify end to end", T9_other_shapes_build_and_verify),
+    ("T9", "every registered shape builds and verifies end to end", T9_other_shapes_build_and_verify),
 ]
 
 

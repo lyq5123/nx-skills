@@ -279,10 +279,95 @@ class BracketRecipeTests(unittest.TestCase):
         self.assertEqual(nxc.part_metrics(spec)[1], 8)     # 6 sides + 2 ends
 
 
+class ProfileRecipeTests(unittest.TestCase):
+    """The generic extruded-profile recipe: any straight-sided part.
+
+    Its strongest test is the cross-check below - the named recipes must reproduce
+    exactly when their outline is written as a polygon, or one of the two paths is
+    wrong.
+    """
+
+    BRACKET_AS_PROFILE = dict(
+        points=[[0, 0], [80, 0], [80, 12], [10, 12], [10, 60], [0, 60]],
+        thickness=40.0,
+        holes=[[20, 6, 6.0], [60, 6, 6.0]],
+    )
+    PLATE_AS_PROFILE = dict(
+        points=[[0, 0], [120, 0], [120, 80], [0, 80]],
+        thickness=10.0,
+        holes=[[12, 12, 6.6], [108, 12, 6.6], [108, 68, 6.6], [12, 68, 6.6],
+               [60, 40, 30.0]],
+    )
+
+    def test_generic_matches_the_named_bracket_recipe(self):
+        gv, gf = nxc.part_metrics({"part": "extruded_profile",
+                                  "params": self.BRACKET_AS_PROFILE})
+        nv, nf = nxc.part_metrics({"part": "l_bracket", "params": {
+            "base_l": 80.0, "base_t": 12.0, "wall_t": 10.0, "total_h": 60.0,
+            "width": 40.0, "hole_d": 6.0, "hole_inset_x": 20.0}})
+        self.assertAlmostEqual(gv, nv, places=6)
+        self.assertEqual(gf, nf)
+        self.assertAlmostEqual(gv, 55338.053, places=3)      # the NX measurement
+
+    def test_generic_matches_the_named_plate_recipe(self):
+        gv, gf = nxc.part_metrics({"part": "extruded_profile",
+                                  "params": self.PLATE_AS_PROFILE})
+        nv, nf = nxc.part_metrics({"part": "mounting_plate", "params": self.DEFAULT_PLATE})
+        self.assertAlmostEqual(gv, nv, places=6)
+        self.assertEqual(gf, nf)
+        self.assertAlmostEqual(gv, 87562.93877, places=3)    # the NX measurement
+
+    DEFAULT_PLATE = dict(nxc.DEFAULT_PLATE["params"])
+
+    def test_fixture_matches_an_independent_shoelace(self):
+        spec = spec_from_fixture("profile_ok.json")
+        vol, faces = nxc.part_metrics(spec)
+        # the outline's shoelace area is 11200 mm^2
+        area = 11200.0
+        self.assertAlmostEqual(vol, area * 6.0 - 2 * math.pi * 6.0 ** 2 * 6.0, places=6)
+        self.assertEqual(faces, 10)
+        self.assertEqual(nxc.cylindrical_faces(spec), 2)
+
+    def test_concave_outline_is_accepted(self):
+        # the default L outline is concave; its centroid-based seed must still work
+        self.assertEqual(nxc.validate_part({"part": "extruded_profile",
+                                            "params": self.BRACKET_AS_PROFILE}), [])
+
+    def test_no_holes_is_legal(self):
+        params = dict(self.BRACKET_AS_PROFILE, holes=[])
+        self.assertEqual(nxc.validate_part({"part": "extruded_profile",
+                                            "params": params}), [])
+        vol, faces = nxc.part_metrics({"part": "extruded_profile", "params": params})
+        self.assertEqual(faces, 8)                            # 6 sides + 2 ends
+        self.assertAlmostEqual(vol, 1440.0 * 40.0, places=6)
+
+    def test_bad_outlines_and_holes_are_rejected(self):
+        base = dict(self.BRACKET_AS_PROFILE)
+        cases = [
+            (dict(base, points=[[0, 0], [10, 0], [20, 0]]), "no area"),
+            (dict(base, points=[[0, 0], [10, 10]]), "at least 3"),
+            (dict(base, points=[[0, 0], [0, 0], [10, 0], [10, 10]]), "zero-length"),
+            (dict(base, thickness=0.0), "must be > 0"),
+            (dict(base, points="circle"), "must be a list"),
+            (dict(base, holes=[[500, 500, 10.0]]), "outside the outline"),
+            (dict(base, holes=[[5, 5, 20.0]]), "crosses the outline"),
+            (dict(base, holes=[[20, 6, 6.0], [22, 6, 6.0]]), "overlap"),
+            (dict(base, holes=[["20", 6, 6.0]]), "must be numbers"),
+        ]
+        for params, needle in cases:
+            problems = nxc.validate_part({"part": "extruded_profile", "params": params})
+            self.assertTrue(any(needle in p for p in problems),
+                            "%s not caught: %r" % (needle, problems))
+
+    def test_alias_resolves(self):
+        self.assertEqual(nxc.part_type_of({"part": "profile"}), "extruded_profile")
+
+
 class RegistryCoverageTests(unittest.TestCase):
     def test_all_shapes_are_registered(self):
         self.assertEqual(nxr.known_parts(),
-                         ["circular_flange", "l_bracket", "mounting_plate"])
+                         ["circular_flange", "extruded_profile", "l_bracket",
+                          "mounting_plate"])
 
     def test_every_recipe_exposes_params_and_rules(self):
         for name in nxr.known_parts():
