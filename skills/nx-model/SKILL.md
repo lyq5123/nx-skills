@@ -9,10 +9,12 @@ You build NX parts by **writing an NX Open Python journal, running it, and measu
 A model that merely "ran without error" is not a deliverable; a model whose volume and topology
 match the hand-computed values is.
 
-**Route check before you start.** This skill produces a *file*, headless - it does not appear in a
-window the user may have open. If they want to watch it being built, or asked you to "operate NX",
-that is the `nx-gui` skill instead (and read its limits first: menus and dropdowns are not
-automatable). Otherwise you are in the right place.
+**Route check before you start.** This skill builds geometry headlessly and then **opens the result in
+the user's NX session** (step 5) - so the user does end up looking at the part, with its feature tree,
+without anyone clicking through NX. What it does *not* do is animate the build: if the user wants to
+watch features appear one at a time, or asked you to "operate NX", that is the `nx-gui` skill instead
+(read its limits first - menus and dropdowns are not automatable, and no in-session playback API
+exists). Otherwise you are in the right place.
 
 The tracked workflow:
 
@@ -21,9 +23,10 @@ The tracked workflow:
 3. **Run the journal headless** and read its exit code, log and result JSON.
 4. **Verify numerically** - a separate journal opens the saved part and compares against analytic
    values you compute yourself.
-5. Surface the part in the user's NX if they have one open, then report what was built.
+5. **`python show_in_nx.py <spec>`** so the part appears in the user's NX, then report what was built.
 
-Do not skip steps 3 and 4. They are the difference between this skill and guessing at API calls.
+Do not skip steps 3, 4 or 5. 3 and 4 are the difference between this skill and guessing at API calls;
+5 is the difference between handing someone a filename and showing them the part.
 
 ## Environment
 
@@ -243,20 +246,36 @@ Run it after touching any script.
 
 ## Showing the part in the user's open NX session
 
-A journal builds a file; it does not appear in a window the user already has open. If they expect to
-see it - and they usually do - the shell opens it into the running session:
+A journal builds a file; it does not appear in a window the user is looking at. **Always close that gap
+after a successful build and verify** - it is a documented step, not an afterthought:
 
 ```bash
-cmd //c start "" "C:\path\to\part.prt"
+python show_in_nx.py my_spec.json      # or: python show_in_nx.py path/to/part.prt
 ```
 
-Verified: this loaded the part into the **already-running** NX 2406 session (no second `ugraf.exe`
-process) and it became the displayed part. Use it after every build rather than telling the user to go
-find the file.
+It resolves `out_dir`/`part_name` from the spec and hands the `.prt` to the operating system
+(`os.startfile`, with `xdg-open`/`open` fallbacks), so **NX opens it in the session already running** -
+or starts NX if none is. Plain Python 3, no `NXOpen` import, no Computer Use, no clicking: any agent
+that can run a command can do this. Verified - NX shows the part in the graphics area with its full
+feature tree in the part navigator (`模型历史记录 → 拉伸(0) → 拉伸(1) → 边倒圆(2)` for the sample plate).
 
-Do not try to open it from NX's own UI. `Ctrl+O` is swallowed, and the `文件` backstage plus the
-`菜单(M)` pull-down are invisible to both screenshots and accessibility. See the `nx-gui` skill for
-what is and is not drivable by hand.
+### Why not drive NX's own UI for this
+
+Three separate dead ends, all measured; do not spend time rediscovering them:
+
+- **NX exposes no API to start journal playback in a live session.** `JournalManager` has
+  `IsJournalRunning` / `StartRecordingJournal` / `PauseJournal` - and no `PlayJournal`/`ExecuteJournal`.
+- **`run_journal.exe` cannot attach to a running session.** Its options are `-pim`, `-r=`, `-args`,
+  `-allow_redo`, `-help`; every one of them runs a *separate* batch session.
+- **NX's `Ctrl+O` is swallowed, and the `文件` backstage / `菜单(M)` pull-down are invisible** to both
+  screenshots and accessibility. The `nx-gui` skill has the full capability matrix.
+
+### Watched-building vs. appears-finished - be straight with the user
+
+Opening the part shows the **finished model and its feature tree**, not the features appearing one at a
+time. Nothing in this skill can animate it: playback needs a GUI trigger, which means either a user
+action (Developer > Play) or desktop automation that only works if the calling agent has Computer Use.
+Do not promise a live, animated build - describe what the user will actually see.
 
 ## Non-negotiable rules
 
@@ -294,6 +313,7 @@ logical step.
 | `scripts/nx_common.py` | the shared spec loader, validator, logger, and the analytic metrics both journals use |
 | `scripts/build_plate.py` | copy this to start a new part; parameter block at the top, spec-driven |
 | `scripts/verify_part.py` | measuring a finished part against its spec |
+| `scripts/show_in_nx.py` | opening the built part in the user's NX (run with plain Python, not as a journal) |
 | `scripts/check_step.py` | proving a STEP export actually contains geometry |
 | `tests/run_tests.py` | regression suite; run it after any change to a script |
 | `tests/specs/*.json` | working examples, including five that must be rejected |

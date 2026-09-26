@@ -213,6 +213,15 @@ def T6_missing_and_malformed_spec():
     rc, out = run("build_plate.py", [broken])
     check(rc != 0 and "not valid JSON" in out, "malformed spec: rc=%d %s" % (rc, out[-400:]))
 
+    # A stray option must NOT be ignored. Silently dropping it fell through to the
+    # built-in defaults, so `-arg spec.json` (one dash) quietly built the default
+    # part instead of the one asked for - a silent wrong model.
+    rc, out = run("build_plate.py", ["-arg", os.path.join(SPECS, "plate_ok.json")])
+    check(rc != 0 and "unexpected option" in out,
+          "stray option not rejected: rc=%d %s" % (rc, out[-400:]))
+    check("plate_ok" not in out,
+          "a stray option still built something: %s" % out[-300:])
+
 
 def T7_step_contains_geometry():
     """The STEP file must hold a solid, not just exist."""

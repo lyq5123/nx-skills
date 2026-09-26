@@ -69,12 +69,18 @@ Write a spec:
 }
 ```
 
-Build it, then check it with a **separate** journal opening the saved part:
+Build it, then check it with a **separate** journal opening the saved part, then show it in NX:
 
 ```bash
 "$UGII_BASE_DIR/NXBIN/run_journal.exe" skills/nx-model/scripts/build_plate.py  -args my_spec.json
 "$UGII_BASE_DIR/NXBIN/run_journal.exe" skills/nx-model/scripts/verify_part.py -args my_spec.json
+python skills/nx-model/scripts/show_in_nx.py my_spec.json
 ```
+
+`show_in_nx.py` is plain Python (no `NXOpen` import) and hands the `.prt` to the OS, so **the part opens
+in the NX session that is already running** - or starts NX if none is. Any agent that can run a command
+can do that step; it needs no Computer Use and no clicking. The part appears with its full feature tree
+in the part navigator.
 
 The verifier computes the expected volume from the same analytic formula the build used, so the two
 cannot drift apart. Verified results for the shipped fixtures:
@@ -109,7 +115,7 @@ python skills/nx-model/tests/run_tests.py     # ~4 min, needs NX installed
 python skills/nx-model/tests/run_tests.py T4  # a single test
 ```
 
-Seven tests, including a **negative control** (the verifier must *reject* a part built to different
+Eight tests, including a **negative control** (the verifier must *reject* a part built to different
 dimensions — otherwise a verifier that always passes looks green) and five conflict fixtures that
 must all be rejected. Any Python 3 can run the harness; it only shells out to NX.
 

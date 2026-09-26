@@ -140,12 +140,21 @@ def load_spec(argv, default=None):
     which is what keeps old invocations working.
     """
     spec = json.loads(json.dumps(default or DEFAULT_PLATE))  # deep copy
-    args = [a for a in argv[1:] if not a.startswith("-")]
-    if not args:
+    rest = list(argv[1:])
+    # Unknown options are REJECTED rather than ignored. Silently dropping them
+    # meant a typo like `-arg spec.json` fell through to the built-in defaults and
+    # quietly built the wrong part - exactly the silent-wrong-model failure this
+    # skill exists to prevent. run_journal.exe passes user arguments through
+    # untouched, so anything starting with "-" here is a mistake.
+    bad = [a for a in rest if a.startswith("-")]
+    if bad:
+        raise SpecError("unexpected option %r - this takes at most one spec file "
+                        "path and nothing else" % bad[0])
+    if not rest:
         return spec, "built-in defaults"
-    if len(args) > 1:
-        raise SpecError("expected at most one spec file, got %d: %r" % (len(args), args))
-    path = args[0]
+    if len(rest) > 1:
+        raise SpecError("expected at most one spec file, got %d: %r" % (len(rest), rest))
+    path = rest[0]
     if not os.path.isfile(path):
         raise SpecError("spec file not found: %s" % path)
     try:
