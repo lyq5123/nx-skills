@@ -86,6 +86,9 @@ A spec is a JSON object. Copy `tests/specs/plate_ok.json` as a starting point:
 }
 ```
 
+- **`part`** picks the shape: `mounting_plate` (the default when omitted), `circular_flange`
+  (`flange`), or `l_bracket` (`bracket`). Each takes a different set of `params` - see the table under
+  "Building from a drawing" above, and each has its own builder journal.
 - **Any subset of `params` may be given**; omitted keys fall back to the journal's built-in defaults.
 - `params` must be numbers, not strings. `"plate_w": "200"` is rejected.
 - Set a feature off with `0`: `hole_d: 0` skips the corner holes, `bore_d: 0` skips the bore,
@@ -145,11 +148,18 @@ These catch a real share of misreads, and they are free:
 
 ### If the drawing is not a supported shape, say so first
 
-This skill currently has exactly one geometry recipe - the rectangular plate with corner holes, a
-central bore and corner fillets (see `references/` and `nx_recipes.py`). If the drawing is a flange,
-a bracket, a turned part, or anything with a pocket, step or slot, **stop and say that before doing
-any work**: no amount of careful transcription will build it. Adding a shape means adding a recipe -
-geometry formula, validation rules and a builder - not editing the existing ones.
+This skill has three geometry recipes, all in `nx_recipes.py`:
+
+| `part` | Shape | Parameters |
+| --- | --- | --- |
+| `mounting_plate` (default) | rectangular plate, corner holes, centre bore, corner fillets | `plate_w` `plate_h` `plate_t` `hole_d` `hole_inset` `bore_d` `fillet_r` |
+| `circular_flange` (`flange`) | disc, centre bore, bolt circle, rim chamfers | `od` `id` `thk` `bcd` `n_bolts` `bolt_d` `chamfer` |
+| `l_bracket` (`bracket`) | L profile extruded, two through-holes | `base_l` `base_t` `wall_t` `total_h` `width` `hole_d` `hole_inset_x` |
+
+If the drawing is none of these - a turned part, anything with a pocket, step or slot, a third hole
+pattern - **stop and say so before doing any work**: no amount of careful transcription will build it.
+Adding a shape means adding a recipe (geometry formula, validation rules) plus a builder journal that
+calls `nx_journal.run()`; the existing journals do not change.
 
 ### When reporting a finished part
 
@@ -234,15 +244,16 @@ quickest way to spot a missing hole.
 ## Tests
 
 ```bash
-python tests/run_tests.py          # ~3.5 min, needs NX installed; any Python 3
-python tests/run_tests.py T4       # one test by prefix
+python tests/run_tests.py          # ~7 min, needs NX installed; any Python 3
+python tests/run_tests.py T4        # one test by prefix
+python tests/test_recipes.py        # ~0.01 s, no NX: the recipe rules and formulas
 ```
 
-Seven tests cover the no-argument path (backward compatibility), a spec-driven build with an
+Nine tests cover the no-argument path (backward compatibility), a spec-driven build with an
 **independently** computed volume, the verifier agreeing, the verifier *rejecting* a part built to
 other dimensions (the negative control - without it a verifier that always passes looks green), each
-parameter-conflict class, missing/malformed spec files, and STEP content. Exit code 0 = all passed.
-Run it after touching any script.
+parameter-conflict class, bad invocations, STEP content, the recipe unit tests, and **every registered
+shape building and verifying end to end**. Exit code 0 = all passed. Run it after touching any script.
 
 ## Showing the part in the user's open NX session
 
@@ -310,12 +321,16 @@ logical step.
 | `references/nxopen-api.md` | you need an exact signature or enum for NX 2406 |
 | `references/recipes.md` | you need the code shape for sketch, revolve, hole, blend, chamfer, pattern, boolean, measure, or the geometry-selection helpers |
 | `references/pitfalls.md` | something failed and you want the cause - error strings are indexed here |
-| `scripts/nx_common.py` | the shared spec loader, validator, logger, and the analytic metrics both journals use |
-| `scripts/build_plate.py` | copy this to start a new part; parameter block at the top, spec-driven |
-| `scripts/verify_part.py` | measuring a finished part against its spec |
-| `scripts/show_in_nx.py` | opening the built part in the user's NX (run with plain Python, not as a journal) |
+| `scripts/nx_common.py` | the shared spec loader, validator, logger and path resolver (plain Python) |
+| `scripts/nx_recipes.py` | **the per-shape rules**: parameters, validation, analytic volume and face counts (plain Python) |
+| `scripts/nx_journal.py` | the NX-side plumbing every builder shares: session, extrude/blend/chamfer, self-check, save, STEP export |
+| `scripts/build_plate.py` | the plate builder - geometry only; copy it to start a new shape |
+| `scripts/build_flange.py` / `build_bracket.py` | the other two shapes |
+| `scripts/verify_part.py` | measuring a finished part against its spec, whatever shape it is |
+| `scripts/show_in_nx.py` | opening the built part in the user's NX (plain Python, not a journal) |
 | `scripts/check_step.py` | proving a STEP export actually contains geometry |
 | `tests/run_tests.py` | regression suite; run it after any change to a script |
+| `tests/test_recipes.py` | the recipe rules and formulas, in 0.01 s, no NX needed |
 | `tests/specs/*.json` | working examples, including five that must be rejected |
 
 ## Reporting back

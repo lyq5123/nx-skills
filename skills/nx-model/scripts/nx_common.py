@@ -190,8 +190,14 @@ def known_parts():
 
 
 def part_type_of(spec):
-    """The recipe name a spec asks for, defaulting to the mounting plate."""
-    return spec.get("part") or recipes.DEFAULT_PART
+    """The recipe a spec asks for, defaulting to the mounting plate.
+
+    Resolves aliases to the registered name ("flange" -> "circular_flange") so the
+    result file records one identity per shape. An unknown name is returned as
+    written, so the error message can quote what the user actually typed.
+    """
+    name = spec.get("part") or recipes.DEFAULT_PART
+    return recipes.canonical_name(name) if recipes.has_recipe(name) else name
 
 
 def validate_part(spec):

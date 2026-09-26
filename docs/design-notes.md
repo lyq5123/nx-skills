@@ -121,8 +121,9 @@ The vertical-edge helper in `references/recipes.md` exists for exactly this.
 differ from what was written to disk. Checking inside the build journal hides the errors you are
 looking for.
 
-Expected values come from the same analytic function the build self-check uses (`plate_metrics`), so
-the two cannot drift. Face count catches what volume can miss: the sample plate has 11 faces
+Expected values come from the same analytic function the build self-check uses - `nxc.part_metrics`,
+which dispatches to the recipe registered for the spec's shape - so the two cannot drift. That is also
+why a new shape must arrive with its formula: the verifier measures against it. Face count catches what volume can miss: the sample plate has 11 faces
 un-filleted and 15 with corner fillets — if you expected fillets and got 11, they never applied.
 
 ## 8. Running a journal: the environment facts

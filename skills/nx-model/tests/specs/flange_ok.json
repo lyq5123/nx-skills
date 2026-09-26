@@ -1,0 +1,10 @@
+{
+  "part_name": "flange_ok",
+  "out_dir": "~/nx_out",
+  "part": "circular_flange",
+  "params": {
+    "od": 200.0, "id": 80.0, "thk": 25.0,
+    "bcd": 150.0, "n_bolts": 8, "bolt_d": 12.0,
+    "chamfer": 3.0
+  }
+}

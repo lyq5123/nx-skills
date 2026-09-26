@@ -247,15 +247,49 @@ def T8_recipe_unit_tests():
                              % ((p.stdout or "") + (p.stderr or ""))[-2500:])
 
 
+def T9_other_shapes_build_and_verify():
+    """Every registered shape builds a correct solid and passes the verifier.
+
+    The registry is only worth having if a second shape actually works end to end,
+    so each one gets a real build and a real independent check.
+    """
+    for fixture, name, exp_vol, exp_faces in (
+            ("flange_ok.json", "t9_flange", 631516.672039, 14),
+            ("bracket_ok.json", "t9_bracket", 128638.274876, 10)):
+        spec = spec_path(fixture, name=name)
+        reset_result(name)
+        rc, out = run("build_%s.py" % name.split("_")[1], [spec])
+        check(rc == 0, "%s: build exit %d\n%s" % (name, rc, out[-900:]))
+        r = result_of(name)
+        check(r is not None and r["status"] == "ok",
+              "%s: status=%s errors=%s" % (name, r and r.get("status"),
+                                           r and r.get("errors")))
+        got = r["checks"]["volume"]["actual"]
+        check(abs(got - exp_vol) < 1e-3,
+              "%s: volume %.6f != independently computed %.6f" % (name, got, exp_vol))
+        check(r["checks"]["faces"]["actual"] == exp_faces,
+              "%s: faces=%s expected %s" % (name, r["checks"]["faces"]["actual"], exp_faces))
+        # the alias must resolve to one identity in the output
+        check(r["part"] != "flange" and r["part"] != "bracket",
+              "%s: alias not canonicalised in result.json (%s)" % (name, r["part"]))
+
+        reset_result(name, verify=True)
+        rc, out = run("verify_part.py", [spec])
+        check(rc == 0, "%s: verify exit %d\n%s" % (name, rc, out[-900:]))
+        check(result_of(name, verify=True)["status"] == "ok",
+              "%s: independent verify failed" % name)
+
+
 TESTS = [
     ("T1", "build with no arguments (backward compatibility)", T1_build_default),
     ("T2", "build from a spec file, volume checked independently", T2_build_from_spec),
     ("T3", "independent verifier agrees with the part", T3_verify_spec),
     ("T4", "verifier REJECTS a part that does not match the spec", T4_verify_detects_wrong_part),
     ("T5", "parameter conflicts rejected before NX is touched", T5_bad_specs_rejected),
-    ("T6", "missing / malformed spec files fail clearly", T6_missing_and_malformed_spec),
+    ("T6", "missing / malformed spec files and stray options fail clearly", T6_missing_and_malformed_spec),
     ("T7", "exported STEP contains real geometry", T7_step_contains_geometry),
     ("T8", "part-recipe unit tests (no NX needed)", T8_recipe_unit_tests),
+    ("T9", "flange and bracket build and verify end to end", T9_other_shapes_build_and_verify),
 ]
 
 

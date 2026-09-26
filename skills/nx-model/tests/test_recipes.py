@@ -192,5 +192,105 @@ class BackwardCompatibilityTests(unittest.TestCase):
         self.assertTrue(callable(nx_common.plate_metrics))
 
 
+class FlangeRecipeTests(unittest.TestCase):
+    """OD160 / ID60 / t20 / BCD120 / 6x D14 / C2 - measured on NX as
+    325108.763 mm^3, 12 faces, 8 cylindrical faces."""
+
+    FLANGE = dict(od=160.0, id=60.0, thk=20.0, bcd=120.0, n_bolts=6,
+                  bolt_d=14.0, chamfer=2.0)
+
+    def test_metrics_match_the_measured_part(self):
+        spec = {"part": "circular_flange", "params": self.FLANGE}
+        vol, faces = nxc.part_metrics(spec)
+        self.assertAlmostEqual(vol, 325108.763, places=3)
+        self.assertEqual(faces, 12)
+        self.assertEqual(nxc.cylindrical_faces(spec), 8)
+
+    def test_fixture_matches_independently_computed_values(self):
+        spec = spec_from_fixture("flange_ok.json")
+        vol, faces = nxc.part_metrics(spec)
+        #  pi*100^2*25 - pi*40^2*25 - 8*pi*6^2*25 - 2*pi*3^2*(100 - 1)
+        self.assertAlmostEqual(vol, 631516.672039, places=3)
+        self.assertEqual(faces, 14)
+        self.assertEqual(nxc.cylindrical_faces(spec), 10)
+
+    def test_valid_flange_passes(self):
+        self.assertEqual(nxc.validate_part({"part": "circular_flange",
+                                            "params": self.FLANGE}), [])
+
+    def test_flange_conflicts_are_rejected(self):
+        cases = [
+            (dict(self.FLANGE, bcd=180.0), "outer edge"),
+            (dict(self.FLANGE, chamfer=12.0), "too deep"),
+            (dict(self.FLANGE, id=90.0), "no wall"),
+            (dict(self.FLANGE, n_bolts=12, bolt_d=35.0), "merge"),
+        ]
+        for params, needle in cases:
+            problems = nxc.validate_part({"part": "circular_flange", "params": params})
+            self.assertTrue(any(needle in p for p in problems),
+                            "%s not caught: %r" % (needle, problems))
+
+    def test_alias_resolves(self):
+        self.assertTrue(nxr.has_recipe("flange"))
+        self.assertEqual(nxc.part_type_of({"part": "flange"}), "circular_flange")
+
+
+class BracketRecipeTests(unittest.TestCase):
+    """80/12/10/60 wide 40 with two D6 holes - measured on NX as
+    55338.053 mm^3, 10 faces, 2 cylindrical faces."""
+
+    BRACKET = dict(base_l=80.0, base_t=12.0, wall_t=10.0, total_h=60.0,
+                   width=40.0, hole_d=6.0, hole_inset_x=20.0)
+
+    def test_metrics_match_the_measured_part(self):
+        spec = {"part": "l_bracket", "params": self.BRACKET}
+        vol, faces = nxc.part_metrics(spec)
+        self.assertAlmostEqual(vol, 55338.053, places=3)
+        self.assertEqual(faces, 10)
+        self.assertEqual(nxc.cylindrical_faces(spec), 2)
+
+    def test_fixture_matches_independently_computed_values(self):
+        spec = spec_from_fixture("bracket_ok.json")
+        vol, faces = nxc.part_metrics(spec)
+        #  (120*15 + 12*(90-15))*50 - 2*pi*4.5^2*50
+        self.assertAlmostEqual(vol, 128638.274876, places=3)
+        self.assertEqual(faces, 10)
+
+    def test_valid_bracket_passes(self):
+        self.assertEqual(nxc.validate_part({"part": "l_bracket",
+                                            "params": self.BRACKET}), [])
+
+    def test_bracket_conflicts_are_rejected(self):
+        cases = [
+            (dict(self.BRACKET, hole_inset_x=78.0), "wall"),
+            (dict(self.BRACKET, hole_d=20.0), "break through"),
+            (dict(self.BRACKET, base_t=70.0), "no vertical leg"),
+        ]
+        for params, needle in cases:
+            problems = nxc.validate_part({"part": "l_bracket", "params": params})
+            self.assertTrue(any(needle in p for p in problems),
+                            "%s not caught: %r" % (needle, problems))
+
+    def test_zero_holes_is_legal(self):
+        params = dict(self.BRACKET, hole_d=0.0)
+        self.assertEqual(nxc.validate_part({"part": "l_bracket", "params": params}), [])
+        spec = {"part": "l_bracket", "params": params}
+        self.assertEqual(nxc.cylindrical_faces(spec), 0)
+        self.assertEqual(nxc.part_metrics(spec)[1], 8)     # 6 sides + 2 ends
+
+
+class RegistryCoverageTests(unittest.TestCase):
+    def test_all_shapes_are_registered(self):
+        self.assertEqual(nxr.known_parts(),
+                         ["circular_flange", "l_bracket", "mounting_plate"])
+
+    def test_every_recipe_exposes_params_and_rules(self):
+        for name in nxr.known_parts():
+            self.assertTrue(nxr.param_keys(name), "%s has no param_keys" % name)
+            # a recipe with no validation would accept anything
+            problems = nxr.validate(name, {})
+            self.assertTrue(problems, "%s accepted an empty parameter set" % name)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
