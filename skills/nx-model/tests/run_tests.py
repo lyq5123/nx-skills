@@ -257,13 +257,15 @@ def T9_other_shapes_build_and_verify():
             ("flange_ok.json", "t9_flange", 631516.672039, 14),
             ("bracket_ok.json", "t9_bracket", 128638.274876, 10),
             ("profile_ok.json", "t9_profile", 65842.831974, 10),
-            ("outline_arcs_ok.json", "t9_arcs", 92879.645943, 12)):
+            ("outline_arcs_ok.json", "t9_arcs", 92879.645943, 12),
+            ("cradle_ok.json", "t9_cradle", 57465.466, None)):
         spec = spec_path(fixture, name=name)
         reset_result(name)
         journal = {"t9_flange": "build_flange.py",
                    "t9_bracket": "build_bracket.py",
                    "t9_profile": "build_profile.py",
-                   "t9_arcs": "build_profile.py"}[name]
+                   "t9_arcs": "build_profile.py",
+                   "t9_cradle": "build_cradle.py"}[name]
         rc, out = run(journal, [spec])
         check(rc == 0, "%s: build exit %d\n%s" % (name, rc, out[-900:]))
         r = result_of(name)
@@ -273,8 +275,10 @@ def T9_other_shapes_build_and_verify():
         got = r["checks"]["volume"]["actual"]
         check(abs(got - exp_vol) < 1e-3,
               "%s: volume %.6f != independently computed %.6f" % (name, got, exp_vol))
-        check(r["checks"]["faces"]["actual"] == exp_faces,
-              "%s: faces=%s expected %s" % (name, r["checks"]["faces"]["actual"], exp_faces))
+        if exp_faces is not None:            # cradle has no derivable face count
+            check(r["checks"]["faces"]["actual"] == exp_faces,
+                  "%s: faces=%s expected %s"
+                  % (name, r["checks"]["faces"]["actual"], exp_faces))
         # the alias must resolve to one identity in the output
         check(r["part"] != "flange" and r["part"] != "bracket",
               "%s: alias not canonicalised in result.json (%s)" % (name, r["part"]))

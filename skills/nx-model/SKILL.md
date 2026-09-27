@@ -174,6 +174,16 @@ Read this before transcribing, because it decides whether the job is even possib
 | `mounting_plate` (default) | rectangular plate, corner holes, centre bore, corner fillets | `plate_w` `plate_h` `plate_t` `hole_d` `hole_inset` `bore_d` `fillet_r` |
 | `circular_flange` (`flange`) | disc, centre bore, bolt circle, rim chamfers | `od` `id` `thk` `bcd` `n_bolts` `bolt_d` `chamfer` |
 | `l_bracket` (`bracket`) | L profile extruded, two through-holes | `base_l` `base_t` `wall_t` `total_h` `width` `hole_d` `hole_inset_x` |
+| `shaft_cradle` (`cradle`) | base plate + upper block with a semicircular groove, ears with cross-holes, rounded upper corners | 16 params - see `nx_recipes.py`; **read the caveat below** |
+
+`shaft_cradle` is the one **multi-feature** recipe: it is not a single extrusion, and it exists as a
+worked example of the pattern (extrude a base, unite a block, cut a groove along Y, blend edges on
+planes other than Z, drill along two axes). Its DEFAULT PARAMETERS come from a drawing whose reading is
+**provisional** - the source drawing is internally inconsistent under the reading used, and the
+uncertain values are exposed as parameters (`top_setback`, `base_hole_*`, `ear_hole_z`, and how
+`saddle_w` relates to `2*saddle_r`). Its *geometry and volume formula* are verified (delta 0.0000
+against the kernel); its *defaults* are not confirmed against the drawing. Treat it as a template, not
+as "exercise 16 answered".
 
 **And then the general one, which is the usual answer:**
 

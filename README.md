@@ -118,6 +118,7 @@ build; the numbers are what the tests assert.
 | `mounting_plate` (default) | `plate_w` `plate_h` `plate_t` `hole_d` `hole_inset` `bore_d` `fillet_r` | 120×80×10, 4× D6.6, D30 bore → 87562.939 mm³, 11 faces; with R8 corner fillets → 87013.558, 15 faces |
 | `circular_flange` (`flange`) | `od` `id` `thk` `bcd` `n_bolts` `bolt_d` `chamfer` | OD160 / ID60 / t20 / BCD120 / 6× D14 / C2 → 325108.763 mm³, 12 faces, 8 cylinders + 2 cones |
 | `l_bracket` (`bracket`) | `base_l` `base_t` `wall_t` `total_h` `width` `hole_d` `hole_inset_x` | 80/12/10/60 wide 40, 2× D6 → 55338.053 mm³, 10 faces |
+| `shaft_cradle` (`cradle`) | base plate + block with a semicircular groove, ears with cross-holes, rounded corners (a **multi-feature** example, not a single extrusion; its default dimensions come from a drawing reading that is provisional) | see `nx_recipes.py` |
 | `extruded_profile` (`profile`) | **any outline of lines and circular arcs**: `outline` `[["line",x1,y1,x2,y2], ["arc",xs,ys,xm,ym,xe,ye], …]` (or the older `points` form), `thickness`, `holes` `[[x,y,dia],…]` | a hexagon 100/140/80 wide 6 with 2× D12 → 65842.832 mm³, 10 faces; a 120×80×10 plate with four R10 corners and 2× D12 → 92879.646 mm³, 12 faces |
 
 `extruded_profile` is the general-purpose one: most flat components on a drawing — brackets, covers,
@@ -157,8 +158,8 @@ Stated plainly, because the honest scope is more useful than an optimistic one:
   catch a misread dimension**: it compares NX's measurement against a value derived from the same
   spec, so a wrong number moves both sides together and the run stays green.
 - **No drafting.** No drawing sheets, projected views, annotations, PDF or DWG.
-- **Four shapes, one of them general.** The registry covers a rectangular plate, a circular flange,
-  an L bracket, and `extruded_profile` — any outline of lines and arcs, extruded to a thickness (see
+- **Five shapes, one of them general.** The registry covers a rectangular plate, a circular flange,
+  an L bracket, a shaft cradle (a multi-feature example), and `extruded_profile` — any outline of lines and arcs, extruded to a thickness (see
   [Shapes](#shapes) below). That last one covers most flat parts, rounded corners and slots included.
   Outside it: splines and other non-circular curves, revolved parts, and anything that is not a
   constant-thickness extrusion. Those need a new recipe —
