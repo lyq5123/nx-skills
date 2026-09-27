@@ -110,11 +110,15 @@ def _verify(spec, params, p, log, result):
 
         log.info("  '%s'" % b.Name)
         log.chk("  volume=%.3f  expected=%.3f  delta=%.6f" % (vol, exp_vol, delta))
-        log.chk("  faces=%d (expect %d)  edges=%d" % (n_faces, exp_faces, n_edges))
+        if exp_faces is None:
+            log.chk("  faces=%d (not asserted for this shape)  edges=%d"
+                    % (n_faces, n_edges))
+        else:
+            log.chk("  faces=%d (expect %d)  edges=%d" % (n_faces, exp_faces, n_edges))
 
         if delta >= 1e-3:
             log.err("volume mismatch: off by %.6f mm^3" % delta)
-        if n_faces != exp_faces:
+        if exp_faces is not None and n_faces != exp_faces:
             log.err("face count mismatch: %d vs expected %d" % (n_faces, exp_faces))
 
         # topology cross-check: cylindrical faces trace holes, bore and fillets.

@@ -1,8 +1,8 @@
 # =============================================================================
 #  NX Open Python journal  -  generic extruded profile
 #
-#  Any straight-sided part: a closed polygon extruded to a thickness, with circular
-#  through-holes. Use this for a drawing that is not one of the named parts -
+#  Any flat part: an outline of straight lines and circular arcs, extruded to a
+#  thickness, with circular through-holes. Use this for a drawing that is not one of the named parts -
 #  brackets, covers, gussets, channels, link plates and most flat components are
 #  exactly this shape.
 #
@@ -35,6 +35,7 @@ import NXOpen.GeometricUtilities
 
 import nx_common as nxc
 import nx_journal as nxj
+import nx_recipes as nxr
 
 # -----------------------------------------------------------------------------
 # defaults (mm) - the L-bracket outline, so the no-argument run builds something
@@ -63,23 +64,35 @@ DEFAULT_SPEC = {
 def build(spec, params, p, log, result):
     session = NXOpen.Session.GetSession()
 
-    points = [(float(x), float(y)) for x, y in params["points"]]
-    thickness = float(params["thickness"])
+    segs = nxr.profile_segments(params)          # validated already, but keeps the
+    thickness = float(params["thickness"])       # segment form in one place
     holes = [(float(h[0]), float(h[1]), float(h[2]))
              for h in (params.get("holes") or []) if float(h[2]) > 0]
 
     part = nxj.new_metric_part(session, p["prt"], log)
     bb = NXOpen.GeometricUtilities.BooleanOperation.BooleanType
 
-    # ---- the outline: one closed loop through the given points -------------
-    loop = nxj.closed_loop(part, points)
-    log.ok("outline: %d points, %.1f mm thick" % (len(points), thickness))
+    # ---- the outline: straight AND circular segments, in order --------------
+    curves = []
+    for s in segs:
+        if s[0] == "line":
+            _k, x1, y1, x2, y2 = s
+            curves.append(part.Curves.CreateLine(
+                NXOpen.Point3d(x1, y1, 0.0), NXOpen.Point3d(x2, y2, 0.0)))
+        else:
+            _k, cx, cy, r, a1, sweep = s
+            # NX sweeps counter-clockwise from start to end, so a clockwise segment
+            # is handed over as its reversed (equal) counter-clockwise arc
+            if sweep > 0:
+                curves.append(nxj.arc(part, (cx, cy, 0.0), r, a1, a1 + sweep))
+            else:
+                curves.append(nxj.arc(part, (cx, cy, 0.0), r, a1 + sweep, a1))
+    n_arcs = len([s for s in segs if s[0] == "arc"])
+    log.ok("outline: %d segments (%d with arcs), %.1f mm thick"
+           % (len(segs), n_arcs, thickness))
 
-    # seed the chain from the centroid of the first triangle of the outline - it is
-    # inside a simple polygon, unlike (0,0) which may sit outside a concave one
-    sx = sum(x for x, _y in points) / float(len(points))
-    sy = sum(y for _x, y in points) / float(len(points))
-    feat = nxj.extrude(part, session, loop, NXOpen.Point3d(sx, sy, 0.0),
+    sx, sy = nxr.profile_seed(params)            # a point ON the outline
+    feat = nxj.extrude(part, session, curves, NXOpen.Point3d(sx, sy, 0.0),
                        0.0, thickness, bb.Create, name="profile")
     body = feat.GetBodies()[0]
     body.SetName("Profile")
@@ -87,8 +100,8 @@ def build(spec, params, p, log, result):
 
     # ---- through-holes, cut in ONE subtract extrude ------------------------
     if holes:
-        curves = [nxj.circle(part, hx, hy, dia) for hx, hy, dia in holes]
-        nxj.extrude(part, session, curves, NXOpen.Point3d(holes[0][0], holes[0][1], 0.0),
+        hcurves = [nxj.circle(part, hx, hy, dia) for hx, hy, dia in holes]
+        nxj.extrude(part, session, hcurves, NXOpen.Point3d(holes[0][0], holes[0][1], 0.0),
                     -1.0, thickness + 1.0, bb.Subtract, target=body, name="holes")
         log.ok("%d through-hole(s) cut" % len(holes))
 

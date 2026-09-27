@@ -430,8 +430,8 @@ register(BRACKET,
 # -----------------------------------------------------------------------------
 # recipe: extruded_profile
 #
-# ANY straight-sided part: a closed polygon extruded to a thickness, with circular
-# holes through it. This is the shape to reach for when a drawing is not one of the
+# ANY flat part: an outline of straight lines and circular arcs, extruded to a
+# thickness, with circular holes through it. This is the shape to reach for when a drawing is not one of the
 # named parts - most plate-like components (brackets, covers, gussets, channels,
 # link plates) are exactly this, and the volume is exact:
 #
@@ -447,7 +447,7 @@ register(BRACKET,
 # analytic formula (a circle is not a polygon).
 # -----------------------------------------------------------------------------
 PROFILE = "extruded_profile"
-PROFILE_PARAM_KEYS = ("points", "thickness", "holes")
+PROFILE_PARAM_KEYS = ("points", "outline", "thickness", "holes")
 
 
 def _as_point(value, what):
@@ -488,67 +488,262 @@ def _point_in_polygon(pt, points):
     return inside
 
 
-def _distance_to_polygon_edge(pt, points):
-    """Shortest distance from a point to any edge of the polygon."""
+# -----------------------------------------------------------------------------
+# outline segments: straight AND circular
+#
+# An outline is a list of segments, each either
+#     ["line", x1, y1, x2, y2]
+#     ["arc",  xs, ys, xm, ym, xe, ye]     # start, a point ON the arc, end
+#   the legacy "points" form is still accepted and means straight edges throughout
+#
+# The arc form is THREE POINTS rather than centre/radius/angles, on purpose. An
+# angle pair plus a direction flag cannot distinguish the short arc from the long
+# one between the same two angles - that ambiguity was written wrong twice while
+# building this, which is the argument for removing it. Three points are what a
+# drawing shows and what CAD tools ask for; the centre, radius and sweep are
+# derived, and the direction is implied by which side the middle point is on.
+#
+# The area contribution of a segment comes from Green's theorem, 1/2 * integ(x dy
+# - y dx). For a line that is (x1*y2 - x2*y1)/2; for a circular arc it has a closed
+# form (below), so a profile with rounded corners or a slot is still EXACT - not
+# tessellated, not approximated.
+# -----------------------------------------------------------------------------
+def _arc_from_three_points(xs, ys, xm, ym, xe, ye):
+    """(cx, cy, r, a1_deg, sweep_deg) through three points, or None if collinear."""
+    d = 2.0 * (xs * (ym - ye) + xm * (ye - ys) + xe * (ys - ym))
+    if abs(d) < 1e-12:
+        return None
+    s1 = xs * xs + ys * ys
+    s2 = xm * xm + ym * ym
+    s3 = xe * xe + ye * ye
+    cx = (s1 * (ym - ye) + s2 * (ye - ys) + s3 * (ys - ym)) / d
+    cy = (s1 * (xe - xm) + s2 * (xs - xe) + s3 * (xm - xs)) / d
+    r = math.hypot(xs - cx, ys - cy)
+    a1 = math.degrees(math.atan2(ys - cy, xs - cx))
+    a2 = math.degrees(math.atan2(ye - cy, xe - cx))
+    sweep = (a2 - a1) % 360.0
+    if d < 0.0:                      # the middle point sits on the clockwise side
+        sweep -= 360.0
+    return cx, cy, r, a1, sweep
+
+
+def _parse_segments(params, bad):
+    """Normalise params into a list of segments, appending problems to `bad`."""
+    raw = params.get("outline")
+    if raw is None:
+        pts = params.get("points")
+        if not isinstance(pts, (list, tuple)):
+            bad.append("'points' must be a list of [x, y] pairs, got %s"
+                       % type(pts).__name__)
+            return []
+        if len(pts) < 3:
+            bad.append("'points' needs at least 3 pairs to enclose an area, got %d"
+                       % len(pts))
+            return []
+        try:
+            xy = [_as_point(p, "points[%d]" % i) for i, p in enumerate(pts)]
+        except ValueError as exc:
+            bad.append(str(exc))
+            return []
+        segs = []
+        n = len(xy)
+        for i in range(n):
+            x1, y1 = xy[i]
+            x2, y2 = xy[(i + 1) % n]
+            if math.hypot(x2 - x1, y2 - y1) <= 1e-12:
+                bad.append("points[%d] and points[%d] are the same point - the "
+                           "outline has a zero-length edge" % (i, (i + 1) % n))
+                return []
+            segs.append(("line", x1, y1, x2, y2))
+        return segs
+
+    if not isinstance(raw, (list, tuple)):
+        bad.append("'outline' must be a list of segments, got %s"
+                   % type(raw).__name__)
+        return []
+    segs = []
+    for i, s in enumerate(raw):
+        where = "outline[%d]" % i
+        if not isinstance(s, (list, tuple)) or not s:
+            bad.append("%s must be a list starting with \"line\" or \"arc\", got %r"
+                       % (where, s))
+            continue
+        kind = s[0]
+        nums = s[1:]
+        if kind not in ("line", "arc"):
+            bad.append("%s: unknown segment type %r - use \"line\" or \"arc\""
+                       % (where, kind))
+            continue
+        want = 4 if kind == "line" else 6
+        if len(nums) != want:
+            bad.append("%s: \"%s\" takes %d numbers, got %d%s"
+                       % (where, kind, want, len(nums),
+                          " (arc is start x,y, a point on the arc x,y, end x,y)"
+                          if kind == "arc" else ""))
+            continue
+        ok = True
+        for c in nums:
+            if isinstance(c, bool) or not isinstance(c, (int, float)):
+                bad.append("%s: all coordinates must be numbers, got %r" % (where, c))
+                ok = False
+                break
+        if not ok:
+            continue
+        v = [float(c) for c in nums]
+        if kind == "line":
+            if math.hypot(v[2] - v[0], v[3] - v[1]) <= 1e-12:
+                bad.append("%s: zero-length line" % where)
+                continue
+            segs.append(("line", v[0], v[1], v[2], v[3]))
+        else:
+            arc = _arc_from_three_points(*v)
+            if arc is None:
+                bad.append("%s: the three arc points are collinear, so they do not "
+                           "define a circle" % where)
+                continue
+            cx, cy, r, a1, sweep = arc
+            if r <= 1e-9:
+                bad.append("%s: the arc has zero radius" % where)
+                continue
+            segs.append(("arc", cx, cy, r, a1, sweep))
+    return segs
+
+
+def _seg_start(s):
+    if s[0] == "line":
+        return s[1], s[2]
+    _k, cx, cy, r, a1, _sw = s
+    return cx + r * math.cos(math.radians(a1)), cy + r * math.sin(math.radians(a1))
+
+
+def _seg_end(s):
+    if s[0] == "line":
+        return s[3], s[4]
+    _k, cx, cy, r, a1, sw = s
+    b = math.radians(a1 + sw)
+    return cx + r * math.cos(b), cy + r * math.sin(b)
+
+
+def _seg_mid(s):
+    if s[0] == "line":
+        return (s[1] + s[3]) / 2.0, (s[2] + s[4]) / 2.0
+    _k, cx, cy, r, a1, sw = s
+    b = math.radians(a1 + sw / 2.0)
+    return cx + r * math.cos(b), cy + r * math.sin(b)
+
+
+def _seg_length(s):
+    if s[0] == "line":
+        return math.hypot(s[3] - s[1], s[4] - s[2])
+    return abs(math.radians(s[5])) * s[3]
+
+
+def _seg_area_term(s):
+    """Green's theorem contribution, 1/2 * integ(x dy - y dx), keeping the sign."""
+    if s[0] == "line":
+        _k, x1, y1, x2, y2 = s
+        return (x1 * y2 - x2 * y1) / 2.0
+    _k, cx, cy, r, a1, sw = s
+    a = math.radians(a1)
+    b = math.radians(a1 + sw)
+    # int over the arc of  r^2 + r*(cx*cos t + cy*sin t)  dt
+    inner = r * r * (b - a) + r * (cx * (math.sin(b) - math.sin(a))
+                                  - cy * (math.cos(b) - math.cos(a)))
+    return inner / 2.0
+
+
+def _outline_area(segs):
+    return sum(_seg_area_term(s) for s in segs)
+
+
+def _seg_distance(pt, s):
+    """Shortest distance from a point to one segment."""
     px, py = pt
-    best = float("inf")
-    n = len(points)
-    for i in range(n):
-        x0, y0 = points[i]
-        x1, y1 = points[(i + 1) % n]
+    if s[0] == "line":
+        _k, x0, y0, x1, y1 = s
         dx, dy = x1 - x0, y1 - y0
         seg2 = dx * dx + dy * dy
-        if seg2 <= 0.0:
-            t = 0.0
+        t = 0.0 if seg2 <= 0.0 else max(0.0, min(1.0, ((px - x0) * dx + (py - y0) * dy) / seg2))
+        return math.hypot(px - (x0 + t * dx), py - (y0 + t * dy))
+    _k, cx, cy, r, a1, sw = s
+    d = math.hypot(px - cx, py - cy)
+    if d <= 1e-12:
+        return r                        # the centre itself: every arc point is r away
+    ang = math.degrees(math.atan2(py - cy, px - cx))
+    # is the direction of the point inside the swept range?
+    off = (ang - a1) % 360.0
+    if sw > 0 and off <= sw + 1e-9:
+        return abs(d - r)
+    if sw < 0 and (off - 360.0) >= sw - 1e-9:
+        return abs(d - r)
+    sx, sy = _seg_start(s)
+    ex, ey = _seg_end(s)
+    return min(math.hypot(px - sx, py - sy), math.hypot(px - ex, py - ey))
+
+
+def _discount_arcs(segs, step_deg=2.0):
+    """Polygon approximation of the outline, for the inside/outside test only.
+
+    The inside test is a yes/no and holes must additionally clear the outline by
+    their full radius (checked exactly, below), so a fine tessellation here cannot
+    turn a bad hole into an accepted one.
+    """
+    pts = []
+    for s in segs:
+        if s[0] == "line":
+            pts.append((s[1], s[2]))
         else:
-            t = max(0.0, min(1.0, ((px - x0) * dx + (py - y0) * dy) / seg2))
-        d = math.hypot(px - (x0 + t * dx), py - (y0 + t * dy))
-        if d < best:
-            best = d
-    return best
+            _k, cx, cy, r, a1, sw = s
+            n = max(2, int(abs(sw) / step_deg) + 1)
+            for i in range(n):
+                b = math.radians(a1 + sw * i / float(n))
+                pts.append((cx + r * math.cos(b), cy + r * math.sin(b)))
+    return pts
+
+
+def _distance_to_outline(pt, segs):
+    return min(_seg_distance(pt, s) for s in segs)
 
 
 def profile_validate(params):
     """Validate a structured spec. Returns human-readable problems."""
-    raw_points = params.get("points")
     thickness = params.get("thickness")
     raw_holes = params.get("holes") or []
+    if params.get("outline") is None and params.get("points") is None:
+        return ["missing 'outline' (or the straight-edge 'points' form) - the closed "
+                "boundary of the extruded profile"]
 
-    if raw_points is None:
-        return ["missing parameter 'points' - the closed outline as [[x, y], ...]"]
-    if not isinstance(raw_points, (list, tuple)):
-        return ["'points' must be a list of [x, y] pairs, got %s"
-                % type(raw_points).__name__]
-    if thickness is None:
-        return ["missing parameter 'thickness' (the extrusion depth, mm)"]
     bad = []
-    if isinstance(thickness, bool) or not isinstance(thickness, (int, float)):
+    if thickness is None:
+        bad.append("missing parameter 'thickness' (the extrusion depth, mm)")
+    elif isinstance(thickness, bool) or not isinstance(thickness, (int, float)):
         bad.append("'thickness' must be a number, got %r" % (thickness,))
     elif thickness <= 0:
         bad.append("'thickness' must be > 0, got %s" % thickness)
 
-    if len(raw_points) < 3:
-        bad.append("'points' needs at least 3 pairs to enclose an area, got %d"
-                   % len(raw_points))
-    points = []
-    for i, pv in enumerate(raw_points):
-        try:
-            points.append(_as_point(pv, "points[%d]" % i))
-        except ValueError as exc:
-            bad.append(str(exc))
+    segs = _parse_segments(params, bad)
+    if bad:
+        return bad
+    if len(segs) < 3:
+        bad.append("an outline needs at least 3 segments to enclose an area, got %d"
+                   % len(segs))
+
+    # the segments must join end to end into one closed loop
+    tol = 1e-6
+    for i in range(len(segs)):
+        ex, ey = _seg_end(segs[i])
+        nx_, ny_ = _seg_start(segs[(i + 1) % len(segs)])
+        if math.hypot(ex - nx_, ey - ny_) > tol:
+            bad.append("segment %d ends at (%.4f, %.4f) but segment %d starts at "
+                       "(%.4f, %.4f) - the outline is not a closed loop; list the "
+                       "segments in order, each starting where the last ended"
+                       % (i, ex, ey, (i + 1) % len(segs), nx_, ny_))
+            break
     if bad:
         return bad
 
-    n = len(points)
-    for i in range(n):
-        if points[i] == points[(i + 1) % n]:
-            bad.append("points[%d] and points[%d] are the same point - the outline "
-                       "has a zero-length edge" % (i, (i + 1) % n))
-            break
-    area = _shoelace(points)
-    if abs(area) < 1e-9:
-        bad.append("the outline encloses no area (shoelace area ~ 0) - the points "
-                   "are probably collinear")
+    if abs(_outline_area(segs)) < 1e-9:
+        bad.append("the outline encloses no area (Green's area ~ 0)")
 
     holes = []
     if not isinstance(raw_holes, (list, tuple)):
@@ -575,11 +770,12 @@ def profile_validate(params):
     if bad:
         return bad
 
+    outline_poly = _discount_arcs(segs)
     for i, (hx, hy, dia) in enumerate(holes):
-        if not _point_in_polygon((hx, hy), points):
+        if not _point_in_polygon((hx, hy), outline_poly):
             bad.append("hole %d at (%.3f, %.3f) is outside the outline" % (i, hx, hy))
             continue
-        gap = _distance_to_polygon_edge((hx, hy), points)
+        gap = _distance_to_outline((hx, hy), segs)      # exact, arcs included
         if gap <= dia / 2.0:
             bad.append("hole %d at (%.3f, %.3f) crosses the outline: it is %.3f from "
                        "the nearest edge but its radius is %.3f"
@@ -597,24 +793,52 @@ def profile_validate(params):
 
 
 def profile_metrics(params):
-    points = [_as_point(p, "point") for p in params["points"]]
+    bad = []
+    segs = _parse_segments(params, bad)
+    if bad:
+        raise RecipeError("cannot measure this outline: %s" % "; ".join(bad))
     thickness = params["thickness"]
-    holes = [_as_point(h[:2], "hole") + (float(h[2]),)
-             for h in (params.get("holes") or [])]
+    holes = [h for h in (params.get("holes") or []) if float(h[2]) > 0]
 
-    area = abs(_shoelace(points))
-    vol = area * thickness
-    # one side face per edge, plus the two end faces
-    faces = len(points) + 2
+    vol = abs(_outline_area(segs)) * thickness
+    faces = len(segs) + 2                  # one side face per segment + the two ends
     for _hx, _hy, dia in holes:
-        if dia > 0:
-            vol -= math.pi * (dia / 2.0) ** 2 * thickness
-            faces += 1
+        vol -= math.pi * (dia / 2.0) ** 2 * thickness
+        faces += 1
     return vol, faces
 
 
 def profile_cylindrical_faces(params):
-    return len([h for h in (params.get("holes") or []) if float(h[2]) > 0])
+    bad = []
+    segs = _parse_segments(params, bad)
+    n = len([s for s in segs if s[0] == "arc"])
+    n += len([h for h in (params.get("holes") or []) if float(h[2]) > 0])
+    return n
+
+
+def profile_segments(params):
+    """The outline as normalised segments, for the builder to turn into curves.
+
+    Each segment is either ("line", x1, y1, x2, y2) or ("arc", cx, cy, r, a1_deg,
+    sweep_deg) - a positive sweep is counter-clockwise. Raises RecipeError rather
+    than returning a partial list, because a builder cannot do anything useful with
+    half an outline.
+    """
+    bad = []
+    segs = _parse_segments(params, bad)
+    if bad:
+        raise RecipeError("this outline cannot be built: %s" % "; ".join(bad))
+    return segs
+
+
+def profile_seed(params):
+    """A point ON the outline, to seed the section chain.
+
+    The first segment's midpoint is on the profile by construction, which is what
+    the section builder wants; an averaged 'centroid' of the vertices can fall
+    outside a concave outline and then the chain fails.
+    """
+    return _seg_mid(profile_segments(params)[0])
 
 
 register(PROFILE,
@@ -623,3 +847,192 @@ register(PROFILE,
          profile_metrics,
          profile_cylindrical_faces,
          aliases=("profile", "extrude"))
+
+
+# -----------------------------------------------------------------------------
+# recipe: shaft_cradle
+#
+# A base plate carrying an upper block with a semicircular groove for a shaft,
+# two ears with horizontal holes, and rounded upper outer corners. Modelled on
+# StudyCADCAM 3D exercise 16.
+#
+# This is the first multi-body recipe: a base extrusion, a united upper block, a
+# groove cut ALONG Y (so its profile is drawn in XZ and contains an arc), blends on
+# edges that do not all run along Z, and holes in two directions.
+#
+# The volume is a decomposition, and each term is a shape this project already
+# reasons about: a plate (with corner round-offs), a block, a groove = opening
+# rectangle minus the half-disc of material that stays, and round-offs and holes
+# that run through the depth.
+#
+# FACE COUNT IS NOT DERIVED. Several blends and the groove meet on shared faces, so
+# an honest analytic count is not available; metrics() returns None for it and the
+# journals report it without asserting it. Asserting a number copied from a build
+# would be self-consistency dressed up as verification. The cylindrical face count
+# IS derived, and it catches the commonest failure here - a blend or a hole that
+# silently did not apply.
+# -----------------------------------------------------------------------------
+CRADLE = "shaft_cradle"
+CRADLE_PARAM_KEYS = ("base_l", "base_w", "base_t", "corner_r",
+                     "top_l", "top_w", "top_h", "top_setback",
+                     "saddle_w", "saddle_r", "ear_r", "hole_d",
+                     "base_hole_x", "base_hole_y", "ear_hole_x", "ear_hole_z")
+
+
+def cradle_validate(params):
+    p = {k: params.get(k) for k in CRADLE_PARAM_KEYS}
+    bad = []
+    for k in CRADLE_PARAM_KEYS:
+        v = p[k]
+        if v is None:
+            bad.append("missing parameter '%s'" % k)
+        elif not isinstance(v, (int, float)) or isinstance(v, bool):
+            bad.append("parameter '%s' must be a number, got %r" % (k, v))
+    if bad:
+        return bad
+
+    bl, bw, bt = p["base_l"], p["base_w"], p["base_t"]
+    cr, tl, tw, th, sb = (p["corner_r"], p["top_l"], p["top_w"], p["top_h"],
+                          p["top_setback"])
+    sw, sr, er, hd = p["saddle_w"], p["saddle_r"], p["ear_r"], p["hole_d"]
+    bhx, bhy, ehx, ehz = p["base_hole_x"], p["base_hole_y"], p["ear_hole_x"], p["ear_hole_z"]
+
+    if min(bl, bw, bt, tl, tw, th) <= 0:
+        bad.append("base_l/base_w/base_t/top_l/top_w/top_h must all be > 0")
+    if min(cr, sr, er, sb, bhx, bhy, ehx, ehz) < 0:
+        bad.append("corner_r/saddle_r/ear_r/top_setback and the hole positions "
+                   "must be >= 0")
+    if hd <= 0:
+        bad.append("hole_d must be > 0, got %s" % hd)
+    if sw <= 0:
+        bad.append("saddle_w must be > 0, got %s" % sw)
+    if bad:
+        return bad
+
+    if tl > bl:
+        bad.append("top_l=%.3f is longer than base_l=%.3f" % (tl, bl))
+    if tw > bw:
+        bad.append("top_w=%.3f is deeper than base_w=%.3f" % (tw, bw))
+    if sb + tw > bw:
+        bad.append("top_setback=%.3f + top_w=%.3f overhangs base_w=%.3f"
+                   % (sb, tw, bw))
+    if cr > 0 and cr >= min(bl, bw) / 2.0:
+        bad.append("corner_r=%.3f is too large for a %.1fx%.1f base" % (cr, bl, bw))
+
+    if sr <= 0:
+        bad.append("saddle_r must be > 0, got %s" % sr)
+    elif 2.0 * sr > sw:
+        bad.append("saddle_w=%.3f is narrower than the groove diameter 2*saddle_r="
+                   "%.3f - the arc would not fit inside the opening" % (sw, 2 * sr))
+    if sr > th:
+        bad.append("saddle_r=%.3f is deeper than top_h=%.3f, so the groove would cut "
+                   "into the base plate" % (sr, th))
+    if sw >= tl:
+        bad.append("saddle_w=%.3f leaves no ear: it must be less than top_l=%.3f"
+                   % (sw, tl))
+
+    ear_w = (tl - sw) / 2.0
+    if er > 0:
+        if er >= th:
+            bad.append("ear_r=%.3f is too large for top_h=%.3f" % (er, th))
+        if er >= ear_w:
+            bad.append("ear_r=%.3f is wider than the ear itself (ear width %.3f)"
+                       % (er, ear_w))
+
+    # base holes: inside the base, and clear of the R10 corner rounds
+    for name, x, y in (("left", bhx, bhy), ("right", bl - bhx, bhy)):
+        if x - hd / 2.0 <= 0.0 or y - hd / 2.0 <= 0.0:
+            bad.append("base hole (%s) breaks through the plate edge: centre "
+                       "(%.3f, %.3f), dia %.3f" % (name, x, y, hd))
+        elif (bl - x) - hd / 2.0 <= 0.0 or (bw - y) - hd / 2.0 <= 0.0:
+            bad.append("base hole (%s) breaks through the far edge" % name)
+        elif cr > 0:
+            # the hole must sit inside the rounded corner's circle, or it breaks out
+            # through the round
+            centre = min(x, bl - x) if y < bw / 2.0 else None
+            if y <= cr and x <= cr:
+                d = math.hypot(cr - x, cr - y)
+                if d + hd / 2.0 > cr:
+                    bad.append("base hole (%s) breaks out through the R%.3f corner "
+                               "round: it is %.3f from the round's centre and its "
+                               "radius is %.3f" % (name, cr, d, hd / 2.0))
+            del centre
+
+    # ear holes: inside the ear, between the base top and the top face
+    if ehx - hd / 2.0 <= 0.0:
+        bad.append("ear hole breaks through the end face: ear_hole_x=%.3f, dia %.3f"
+                   % (ehx, hd))
+    elif ehx + hd / 2.0 >= ear_w:
+        bad.append("ear hole is not fully on the ear: ear_hole_x + radius = %.3f but "
+                   "the ear is only %.3f wide" % (ehx + hd / 2.0, ear_w))
+    if ehz - hd / 2.0 <= bt:
+        bad.append("ear hole dips below the base top: ear_hole_z=%.3f, radius %.3f, "
+                   "base_t=%.3f" % (ehz, hd / 2.0, bt))
+    elif ehz + hd / 2.0 >= bt + th:
+        bad.append("ear hole breaks through the top face: ear_hole_z=%.3f, radius "
+                   "%.3f, top face at z=%.3f" % (ehz, hd / 2.0, bt + th))
+    return bad
+
+
+def cradle_metrics(params):
+    bl, bw, bt = params["base_l"], params["base_w"], params["base_t"]
+    cr, tl, tw, th = (params["corner_r"], params["top_l"], params["top_w"],
+                      params["top_h"])
+    sw, sr, er, hd = (params["saddle_w"], params["saddle_r"], params["ear_r"],
+                      params["hole_d"])
+    r_hole = hd / 2.0
+
+    # base plate, less the two front corner round-offs
+    vol = bl * bw * bt
+    if cr > 0:
+        vol -= 2.0 * (cr * cr - math.pi * cr * cr / 4.0) * bt
+    # base holes run through the base only
+    vol -= 2 * math.pi * r_hole ** 2 * bt
+
+    # upper block
+    vol += tl * tw * th
+
+    # groove: the opening rectangle less the material that stays below the arc.
+    #
+    # That "material kept" is NOT the half-disc. The half-disc is bounded by the
+    # arc and the DIAMETER at the level of the groove's centre; what actually stays
+    # is the thinner sliver between the arc and the base top:
+    #     integral over the arc of (arc(x) - z0) dx  =  R^2 * (2 - pi/2)
+    # Using pi*R^2/2 instead is wrong by R^2*(pi - 2). It was wrong here until the
+    # staged volumes caught it - the kernel removed 703.429 mm^2 per unit depth
+    # where the half-disc predicted 446.571, a gap that accounted for the entire
+    # 8990 mm^3 discrepancy. The model was right; this formula was not.
+    if sr > 0:
+        kept_area = sr * sr * (2.0 - math.pi / 2.0)
+        groove_area = sw * th - kept_area
+        vol -= groove_area * tw
+
+    # blends and holes that run through the block's depth
+    if er > 0:
+        vol -= 2.0 * (er * er - math.pi * er * er / 4.0) * tw
+    vol -= 2 * math.pi * r_hole ** 2 * tw
+
+    # None: no honest analytic face count for this shape (see the note above)
+    return vol, None
+
+
+def cradle_cylindrical_faces(params):
+    n = 0
+    if params["corner_r"] > 0:
+        n += 2                      # the two base corner rounds
+    if params["hole_d"] > 0:
+        n += 2                      # base holes
+        n += 2                      # ear holes
+    if params["ear_r"] > 0:
+        n += 2                      # the two upper outer rounds
+    if params["saddle_r"] > 0:
+        n += 1                      # the groove
+    return n
+
+
+register(CRADLE,
+         CRADLE_PARAM_KEYS,
+         cradle_validate,
+         cradle_metrics,
+         cradle_cylindrical_faces,
+         aliases=("cradle", "saddle"))

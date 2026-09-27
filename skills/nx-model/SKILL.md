@@ -89,11 +89,23 @@ A spec is a JSON object. Copy `tests/specs/plate_ok.json` as a starting point:
 - **`part`** picks the shape: `mounting_plate` (the default when omitted), `circular_flange`
   (`flange`), `l_bracket` (`bracket`), or `extruded_profile` (`profile`). Each takes a different set
   of `params` - see the tables under "Building from a drawing" above - and each has its own builder.
-- **`extruded_profile` takes structured params**, not scalars:
-  `"points": [[x, y], ...]` (the closed outline, at least 3 pairs, **do not repeat the first point**),
-  `"thickness": number`, `"holes": [[x, y, dia], ...]` (optional). The outline is straight-edged only,
-  and the validator rejects self-intersecting outlines, holes outside the outline, holes crossing an
-  edge, and overlapping holes.
+- **`extruded_profile` takes structured params**, not scalars: `"thickness": number`,
+  `"holes": [[x, y, dia], ...]` (optional), and the boundary as either
+  - `"outline"`: an ordered list of segments, each
+    - `["line", x1, y1, x2, y2]`, or
+    - `["arc", xs, ys, xm, ym, xe, ye]` - start, a point ON the arc, end.
+
+    Arcs are **three points**, not centre/radius/angles: an angle pair plus a direction flag cannot
+    distinguish the short arc from the long one between the same two angles, so it has to be read
+    twice to be got right. Three points are unambiguous and are what a drawing shows. The segments
+    must join end to end, in order, into one closed loop.
+  - `"points": [[x, y], ...]` (the older straight-edge form, still accepted) - **do not repeat the
+    first point**.
+
+  The outline may mix straight edges and circular arcs, so rounded corners, slots and rounded ends
+  are all expressible; each arc contributes its exact area by Green's theorem, not an approximation.
+  The validator rejects an outline that is not a closed loop, zero-length lines, collinear arc points,
+  holes outside the outline, holes crossing an edge (arcs included), and overlapping holes.
 - **Any subset of `params` may be given**; omitted keys fall back to the journal's built-in defaults.
 - `params` must be numbers, not strings. `"plate_w": "200"` is rejected.
 - Set a feature off with `0`: `hole_d: 0` skips the corner holes, `bore_d: 0` skips the bore,
@@ -167,17 +179,18 @@ Read this before transcribing, because it decides whether the job is even possib
 
 | `part` | Shape | Parameters |
 | --- | --- | --- |
-| `extruded_profile` (`profile`) | **any straight-sided outline** extruded to a thickness, with through-holes | `points` = `[[x,y], ...]` closed outline, `thickness`, `holes` = `[[x,y,dia], ...]` |
+| `extruded_profile` (`profile`) | **any outline of lines and circular arcs** extruded to a thickness, with through-holes | `outline` = `[["line",..], ["arc",..], ...]` or `points`, `thickness`, `holes` |
 
 `extruded_profile` covers most flat components on a drawing - brackets, covers, gussets, link plates,
-channels, gaskets, anything whose outline is straight lines. Its volume is exact (shoelace area ×
+channels, gaskets, and anything with rounded corners, slots or rounded ends. Its volume is exact (shoelace area ×
 thickness − hole cylinders), so it gets the same verification as everything else, and it reproduces
 the named recipes exactly when their outline is written as points (there is a test asserting that).
 
 **Say you cannot build it, before doing any work, when the part is:**
 
-- **curved in outline** - a radius on the outside, an arc, a slot, a keyway. The profile is
-  straight-edged only; a circle is not a polygon. (Holes are fine - they may be circular.)
+- **outlined by anything other than lines and circular arcs** - a spline, an ellipse, a gear tooth, a
+  freeform curve. Circular arcs are fine (see `outline` above); other curve types are not, because
+  there is no exact area formula behind them.
 - **revolved** - a shaft, bushing, or anything drawn as a lathe part. No recipe, and its volume needs
   a different formula.
 - **not a constant-thickness extrusion** - a step, a pocket, a boss, a shell, a draft.
@@ -352,7 +365,7 @@ logical step.
 | `scripts/nx_journal.py` | the NX-side plumbing every builder shares: session, extrude/blend/chamfer, self-check, save, STEP export |
 | `scripts/build_plate.py` | the plate builder - geometry only; copy it to start a new shape |
 | `scripts/build_flange.py` / `build_bracket.py` | the other two named shapes |
-| `scripts/build_profile.py` | the generic one: any straight-sided outline, extruded |
+| `scripts/build_profile.py` | the generic one: any outline of lines and circular arcs, extruded |
 | `scripts/verify_part.py` | measuring a finished part against its spec, whatever shape it is |
 | `scripts/show_in_nx.py` | opening the built part in the user's NX (plain Python, not a journal) |
 | `scripts/check_step.py` | proving a STEP export actually contains geometry |

@@ -326,6 +326,24 @@ runtime - `NXBIN/python/NXOpen_UF.pyd` exists - but **no `.pyi` stubs are shippe
 (`UGOPEN/pythonStubs/NXOpen/` has no `UF` directory). Prefer the `NXOpen` classes above, whose
 signatures you can actually verify.
 
+## Getting the entities a feature created
+
+`Feature.GetEdges()` / `GetFaces()` / `GetBodies()` return **that feature's own** entities, not the
+whole body's - verified on NX 2406: a block extrude gives 12 edges and 6 faces, a hole cut gives the
+2 circular edges and 1 cylindrical face, a boss unite gives its 2 circular edges. The same answer as
+diffing edge tags before and after, and the references **stay valid after a later feature** (checked
+by blending after the fact), so "blend the edges that feature 3 created" is a workable selector for a
+declarative spec.
+
+`GetEntities()` is NOT the same thing - it returned 0 in every case. Do not use it for this.
+
+```python
+feat = nxj.extrude(...)               # CommitFeature() inside
+body = feat.GetBodies()[0]
+for e in feat.GetEdges():             # this feature's edges only
+    ...
+```
+
 ## Measuring
 
 `MeasureManager` is a property of the **part**, not the session:

@@ -38,6 +38,22 @@ def circle(part, cx, cy, dia, z=0.0):
         dia / 2.0, 0.0, 2.0 * math.pi)
 
 
+def arc(part, centre, radius, start_deg, end_deg,
+        x_dir=(1.0, 0.0, 0.0), y_dir=(0.0, 1.0, 0.0)):
+    """A partial arc, for profiles that are not all straight edges.
+
+    `centre` is a 3D point, and x_dir/y_dir span the plane the arc lies in, so an
+    arc can be placed in XZ (a cradle groove) as easily as in XY.
+    Angles are in DEGREES here - the API takes radians, and mixing the two is a
+    silent way to get the wrong sweep.
+    """
+    return part.Curves.CreateArc(
+        NXOpen.Point3d(*centre),
+        NXOpen.Vector3d(*x_dir),
+        NXOpen.Vector3d(*y_dir),
+        radius, math.radians(start_deg), math.radians(end_deg))
+
+
 def closed_loop(part, points, z=0.0):
     """A closed polyline through (x, y) pairs, last point joined back to the first.
 
@@ -52,14 +68,30 @@ def closed_loop(part, points, z=0.0):
 # finding geometry again after a feature was built (never by index - order is
 # not stable across rebuilds)
 # -----------------------------------------------------------------------------
-def vertical_edges(body, tol=1e-6):
-    """Edges parallel to Z, found by geometry. VERIFIED."""
+_AXIS_INDEX = {"x": 0, "y": 1, "z": 2}
+
+
+def edges_along(body, axis, tol=1e-6):
+    """Edges parallel to a global axis, found by geometry. VERIFIED.
+
+    Never by index - edge order is not stable across rebuilds. `axis` is "x", "y"
+    or "z": an edge qualifies when the two components across that axis vanish and
+    the component along it does not.
+    """
+    idx = _AXIS_INDEX[axis]
+    others = [i for i in range(3) if i != idx]
     out = []
     for e in body.GetEdges():
         p0, p1 = e.GetVertices()
-        if abs(p0.X - p1.X) < tol and abs(p0.Y - p1.Y) < tol and abs(p1.Z - p0.Z) > tol:
+        c = (abs(p1.X - p0.X), abs(p1.Y - p0.Y), abs(p1.Z - p0.Z))
+        if c[idx] > tol and all(c[i] < tol for i in others):
             out.append(e)
     return out
+
+
+def vertical_edges(body, tol=1e-6):
+    """Edges parallel to Z. VERIFIED - kept as the name the plate builder reads."""
+    return edges_along(body, "z", tol)
 
 
 def circular_edges_on_ring(body, radius, z, tol=1e-4):
@@ -89,11 +121,16 @@ def cylindrical_face_count(body):
 # features
 # -----------------------------------------------------------------------------
 def extrude(part, session, curves, seed_point, depth_start, depth_end, boolean,
-            target=None, name="extrude"):
+            target=None, name="extrude", direction=(0.0, 0.0, 1.0)):
     """One extrude commit wrapped in its own undo mark. VERIFIED.
 
     Lengths reach the API as STRINGS via RightHandSide: assigning a float to a
     length's .Value applies a silent 25.4x conversion.
+
+    `direction` defaults to +Z and the profile is normally drawn in XY. A groove
+    whose axis is horizontal (a shaft cradle) needs both parts changed together:
+    the curves placed in the plane perpendicular to the cut, and the direction set
+    to match - e.g. curves in XZ at y=y0 with direction (0, 1, 0).
     """
     mark = session.SetUndoMark(NXOpen.Session.MarkVisibility.Visible, name)
     ext = part.Features.CreateExtrudeBuilder(NXOpen.Features.Feature.Null)
@@ -107,7 +144,7 @@ def extrude(part, session, curves, seed_point, depth_start, depth_end, boolean,
     sec.AddToSection([rule], curves[0], NXOpen.NXObject.Null, NXOpen.NXObject.Null,
                      seed_point, NXOpen.Section.Mode.Create, False)
     ext.Direction = part.Directions.CreateDirection(
-        NXOpen.Point3d(0.0, 0.0, 0.0), NXOpen.Vector3d(0.0, 0.0, 1.0),
+        NXOpen.Point3d(0.0, 0.0, 0.0), NXOpen.Vector3d(*direction),
         NXOpen.SmartObject.UpdateOption.WithinModeling)
     feat = ext.CommitFeature()
     ext.Destroy()
@@ -166,6 +203,18 @@ def measure(part, body):
     return mp.Volume, len(body.GetFaces()), len(body.GetEdges())
 
 
+def stage_volume(part, body, log, label):
+    """Log the running volume after one feature.
+
+    When the final self-check disagrees, this is what tells you WHICH feature is
+    responsible instead of leaving you to guess at the total. Each stage's delta
+    can be compared with the matching term of the recipe's decomposition.
+    """
+    vol = measure(part, body)[0]
+    log.chk("  stage %-14s volume %.3f" % (label, vol))
+    return vol
+
+
 def check_geometry(part, body, spec, log, result):
     """Compare the kernel against the recipe's analytic values.
 
@@ -186,12 +235,20 @@ def check_geometry(part, body, spec, log, result):
 
     log.chk("volume %.3f mm^3  expected %.3f  delta %.4f"
             % (vol, exp_vol, abs(vol - exp_vol)))
-    log.chk("faces=%d (expected %d)  edges=%d" % (n_faces, exp_faces, n_edges))
+    if exp_faces is None:
+        # Some shapes have no face count that can be derived honestly (the cradle
+        # block: several blends and a groove meet on shared faces). Asserting a
+        # number copied from a previous run would be self-consistency dressed up as
+        # verification, so it is reported and NOT asserted.
+        log.chk("faces=%d edges=%d  (face count not asserted for this shape)"
+                % (n_faces, n_edges))
+    else:
+        log.chk("faces=%d (expected %d)  edges=%d" % (n_faces, exp_faces, n_edges))
     log.chk("cylindrical faces=%d (expected %d)" % (cyl, exp_cyl))
 
     if abs(vol - exp_vol) >= 1e-3:
         log.err("volume does not match the analytic value - the model is wrong")
-    if n_faces != exp_faces:
+    if exp_faces is not None and n_faces != exp_faces:
         log.err("face count %d, expected %d - a feature did not apply as intended"
                 % (n_faces, exp_faces))
     if cyl != exp_cyl:

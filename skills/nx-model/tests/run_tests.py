@@ -256,12 +256,14 @@ def T9_other_shapes_build_and_verify():
     for fixture, name, exp_vol, exp_faces in (
             ("flange_ok.json", "t9_flange", 631516.672039, 14),
             ("bracket_ok.json", "t9_bracket", 128638.274876, 10),
-            ("profile_ok.json", "t9_profile", 65842.831974, 10)):
+            ("profile_ok.json", "t9_profile", 65842.831974, 10),
+            ("outline_arcs_ok.json", "t9_arcs", 92879.645943, 12)):
         spec = spec_path(fixture, name=name)
         reset_result(name)
         journal = {"t9_flange": "build_flange.py",
                    "t9_bracket": "build_bracket.py",
-                   "t9_profile": "build_profile.py"}[name]
+                   "t9_profile": "build_profile.py",
+                   "t9_arcs": "build_profile.py"}[name]
         rc, out = run(journal, [spec])
         check(rc == 0, "%s: build exit %d\n%s" % (name, rc, out[-900:]))
         r = result_of(name)

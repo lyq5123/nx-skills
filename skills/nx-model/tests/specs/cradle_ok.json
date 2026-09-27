@@ -1,0 +1,12 @@
+{
+  "part_name": "cradle_ok",
+  "out_dir": "~/nx_out",
+  "part": "shaft_cradle",
+  "params": {
+    "base_l": 80.0, "base_w": 40.0, "base_t": 10.0, "corner_r": 10.0,
+    "top_l": 80.0, "top_w": 35.0, "top_h": 20.0, "top_setback": 5.0,
+    "saddle_w": 40.0, "saddle_r": 15.0, "ear_r": 8.0, "hole_d": 8.0,
+    "base_hole_x": 10.0, "base_hole_y": 10.0,
+    "ear_hole_x": 10.0, "ear_hole_z": 20.0
+  }
+}

@@ -279,8 +279,14 @@ class BracketRecipeTests(unittest.TestCase):
         self.assertEqual(nxc.part_metrics(spec)[1], 8)     # 6 sides + 2 ends
 
 
+# the 45-degree point of an R10 corner: 10*sqrt(2)/2. An exact expression, not a
+# rounded literal - three points define the circle, so a truncated middle point
+# makes the derived radius (and therefore the area) slightly off.
+K = 5.0 * math.sqrt(2)
+
+
 class ProfileRecipeTests(unittest.TestCase):
-    """The generic extruded-profile recipe: any straight-sided part.
+    """The generic extruded-profile recipe: any outline of lines and circular arcs.
 
     Its strongest test is the cross-check below - the named recipes must reproduce
     exactly when their outline is written as a polygon, or one of the two paths is
@@ -362,12 +368,123 @@ class ProfileRecipeTests(unittest.TestCase):
     def test_alias_resolves(self):
         self.assertEqual(nxc.part_type_of({"part": "profile"}), "extruded_profile")
 
+    # ---- outlines that contain arcs -------------------------------------
+    #   arcs are three points: start x,y / a point ON the arc x,y / end x,y
+    CAPSULE = dict(outline=[
+        ["line", 10, 0, 90, 0],
+        ["arc", 90, 0, 100, 10, 90, 20],
+        ["line", 90, 20, 10, 20],
+        ["arc", 10, 20, 0, 10, 10, 0],
+    ], thickness=5.0, holes=[])
+
+    ROUNDED_PLATE = dict(outline=[
+        ["line", 10, 0, 110, 0],
+        ["arc", 110, 0, 110 + K, 10 - K, 120, 10],
+        ["line", 120, 10, 120, 70],
+        ["arc", 120, 70, 110 + K, 70 + K, 110, 80],
+        ["line", 110, 80, 10, 80],
+        ["arc", 10, 80, 10 - K, 70 + K, 0, 70],
+        ["line", 0, 70, 0, 10],
+        ["arc", 0, 10, 10 - K, 10 - K, 10, 0],
+    ], thickness=10.0, holes=[[30, 40, 12.0], [90, 40, 12.0]])
+
+    def test_arc_area_is_exact(self):
+        """The arc term comes from Green's theorem, so a rounded outline is exact.
+
+        A capsule: 80 mm of straight sides at 20 mm wide, plus two half-circles
+        (pi*10^2 in total).
+        """
+        spec = {"part": "extruded_profile", "params": self.CAPSULE}
+        vol, faces = nxc.part_metrics(spec)
+        self.assertAlmostEqual(vol, (80 * 20 + math.pi * 100) * 5.0, places=6)
+        self.assertEqual(faces, 6)                      # 4 segments + 2 ends
+        self.assertEqual(nxc.cylindrical_faces(spec), 2)
+
+    def test_rounded_plate_matches_an_independent_hand_calc(self):
+        """120x80 plate, four R10 corners, two D12 holes, 10 thick."""
+        spec = {"part": "extruded_profile", "params": self.ROUNDED_PLATE}
+        vol, faces = nxc.part_metrics(spec)
+        hand = (120 * 80 - 4 * (100 - math.pi * 100 / 4)) * 10 - 2 * math.pi * 36 * 10
+        self.assertAlmostEqual(vol, hand, places=6)
+        self.assertAlmostEqual(vol, 92879.645943, places=3)   # what NX measured
+        self.assertEqual(faces, 12)                     # 8 segments + 2 ends + 2 holes
+        self.assertEqual(nxc.cylindrical_faces(spec), 6)      # 4 corners + 2 holes
+
+    def test_concave_arc_is_accepted_and_subtracts(self):
+        """A semicircular NOTCH in an edge: an arc that curves INTO the material.
+
+        A convex cap and a concave notch are both arcs; which side the middle point
+        falls on is what tells them apart, which is why the three-point form is
+        unambiguous where an angle pair plus a direction flag was not.
+        Here: a 60x40 plate with an R10 half-circle bitten out of the top edge.
+        """
+        notched = dict(outline=[
+            ["line", 0, 0, 60, 0],
+            ["line", 60, 0, 60, 40],
+            ["line", 60, 40, 40, 40],
+            ["arc", 40, 40, 30, 30, 20, 40],        # dips down into the material
+            ["line", 20, 40, 0, 40],
+            ["line", 0, 40, 0, 0],
+        ], thickness=8.0, holes=[])
+        self.assertEqual(nxc.validate_part({"part": "extruded_profile",
+                                            "params": notched}), [])
+        vol, faces = nxc.part_metrics({"part": "extruded_profile", "params": notched})
+        self.assertAlmostEqual(vol, (60 * 40 - math.pi * 100 / 2) * 8.0, places=6)
+        self.assertEqual(faces, 8)                   # 6 segments + 2 ends
+        self.assertEqual(nxc.cylindrical_faces({"part": "extruded_profile",
+                                                "params": notched}), 1)
+
+    def test_arc_outline_area_does_not_depend_on_writing_direction(self):
+        """The same rounded plate traced clockwise: same shape, same |area|."""
+        cw = dict(self.ROUNDED_PLATE, outline=[
+            ["line", 10, 80, 110, 80],
+            ["arc", 110, 80, 110 + K, 70 + K, 120, 70],
+            ["line", 120, 70, 120, 10],
+            ["arc", 120, 10, 110 + K, 10 - K, 110, 0],
+            ["line", 110, 0, 10, 0],
+            ["arc", 10, 0, 10 - K, 10 - K, 0, 10],
+            ["line", 0, 10, 0, 70],
+            ["arc", 0, 70, 10 - K, 70 + K, 10, 80],
+        ])
+        self.assertEqual(nxc.validate_part({"part": "extruded_profile",
+                                            "params": cw}), [])
+        a = nxc.part_metrics({"part": "extruded_profile",
+                              "params": self.ROUNDED_PLATE})[0]
+        b = nxc.part_metrics({"part": "extruded_profile", "params": cw})[0]
+        self.assertAlmostEqual(a, b, places=6)
+
+    def test_bad_arc_outlines_are_rejected(self):
+        cases = [
+            ({"outline": [["line", 0, 0, 10, 0], ["line", 20, 0, 20, 10],
+                          ["line", 20, 10, 0, 10]], "thickness": 5.0}, "closed loop"),
+            ({"outline": [["line", 0, 0, 0, 0], ["line", 0, 0, 10, 0],
+                          ["line", 10, 0, 0, 10]], "thickness": 5.0}, "zero-length"),
+            ({"outline": [["line", 0, 0, 10, 0], ["arc", 0, 0, 5, 0, 10, 0],
+                          ["line", 0, 0, 0, 0]], "thickness": 5.0}, "collinear"),
+            ({"outline": [["line", 0, 0, 10, 0], ["arc", 0, 0, 1, 2, 3],
+                          ["line", 0, 0, 0, 0]], "thickness": 5.0}, "takes 6"),
+            ({"outline": [["spline", 0, 0, 10, 0], ["line", 10, 0, 0, 10]],
+              "thickness": 5.0}, "unknown segment type"),
+            (dict(self.CAPSULE, holes=[[98, 10, 8.0]]), "crosses"),
+            (dict(self.CAPSULE, holes=[[50, 50, 4.0]]), "outside"),
+        ]
+        for params, needle in cases:
+            problems = nxc.validate_part({"part": "extruded_profile", "params": params})
+            self.assertTrue(any(needle in p for p in problems),
+                            "%s not caught: %r" % (needle, problems))
+
+    def test_hole_clear_of_an_arc_is_accepted(self):
+        # 5 mm away from the cap, radius 4: legal, and must not be flagged
+        self.assertEqual(nxc.validate_part(
+            {"part": "extruded_profile",
+             "params": dict(self.CAPSULE, holes=[[95, 10, 8.0]])}), [])
+
 
 class RegistryCoverageTests(unittest.TestCase):
     def test_all_shapes_are_registered(self):
         self.assertEqual(nxr.known_parts(),
                          ["circular_flange", "extruded_profile", "l_bracket",
-                          "mounting_plate"])
+                          "mounting_plate", "shaft_cradle"])
 
     def test_every_recipe_exposes_params_and_rules(self):
         for name in nxr.known_parts():
