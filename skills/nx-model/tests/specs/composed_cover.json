@@ -1,0 +1,31 @@
+{
+  "part_name": "composed_cover",
+  "out_dir": "C:/Users/lu/nx_out",
+  "part": "composed",
+  "params": {
+    "features": [
+      {
+        "op": "profile",
+        "plane": "xy",
+        "thickness": 20.0,
+        "outline": [
+          ["line", 0.0, 0.0, 200.0, 0.0],
+          ["line", 200.0, 0.0, 200.0, 160.0],
+          ["line", 200.0, 160.0, 0.0, 160.0],
+          ["line", 0.0, 160.0, 0.0, 0.0]
+        ]
+      },
+
+      {"op": "blend", "r": 12.0,
+       "edges": {"parallel_to": "z", "mid_at": {"z": 10.0}}},
+
+      {"op": "hole", "axis": "y", "at": [40.0, 10.0], "dia": 16.0, "through": true},
+
+      {"op": "boss", "axis": "z", "at": [100.0, 80.0], "dia": 55.0, "height": 25.0},
+
+      {"op": "chamfer", "c": 3.0,
+       "edges": {"from_feature": 3, "mid_at": {"z": 25.0}}}
+    ]
+  },
+  "export": {"step": true, "log_file": true}
+}

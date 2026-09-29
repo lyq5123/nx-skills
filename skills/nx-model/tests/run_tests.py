@@ -11,6 +11,7 @@
 # =============================================================================
 import glob
 import json
+import math
 import os
 import shutil
 import subprocess
@@ -290,6 +291,74 @@ def T9_other_shapes_build_and_verify():
               "%s: independent verify failed" % name)
 
 
+def T10_composed_features_build_in_order():
+    """The feature-list recipe: five operations, the selectors, and the checks.
+
+    This is the only test that exercises a part NX builds as a SEQUENCE - a plate,
+    a blend on four edges found by geometry, a cross hole, a boss, and a chamfer on
+    one edge picked out of the boss's own edges. Every number below is computed here
+    from the geometry, independently of the skill:
+
+        plate            200 x 160 x 20
+        R12 x 4 corners  (r^2 - pi r^2/4) * thickness, each
+        D16 hole         through 160, along Y
+        D55 boss         only its 5 mm above the plate counts as added material
+
+    Two things make this worth its runtime. The blend and the chamfer remove material
+    the reference value does not model, so the run must report what each removed and
+    add it back before comparing - the total has to land on the analytic volume
+    anyway. And the rounds are the one part of a composed feature list that a volume
+    check cannot see, so the removed amounts are asserted here instead.
+    """
+    name = "t10_composed"
+    spec = spec_path("composed_cover.json", name=name)
+    reset_result(name)
+    rc, out = run("build_composed.py", [spec])
+    check(rc == 0, "build exit %d\n%s" % (rc, out[-1500:]))
+    r = result_of(name)
+    check(r is not None and r["status"] == "ok",
+          "status=%s errors=%s" % (r and r.get("status"), r and r.get("errors")))
+
+    plate = 200.0 * 160.0 * 20.0
+    rounds = 4.0 * (12.0 ** 2 - math.pi * 12.0 ** 2 / 4.0) * 20.0
+    cross_hole = math.pi * 8.0 ** 2 * 160.0
+    boss = math.pi * 27.5 ** 2 * 5.0
+    # the reference value models no blend or chamfer, and the run adds back what they
+    # removed - so what has to match this sum is the volume BEFORE the rounds
+    expected = plate - cross_hole + boss
+
+    vol = r["checks"]["volume"]["actual"]
+    rounded = r["checks"]["volume"].get("rounded_off", 0.0)
+    check(abs(vol + rounded - expected) < 0.5,
+          "volume %.3f + %.3f rounded off != independently computed %.3f"
+          % (vol, rounded, expected))
+
+    # the reported rounds: 4 corner edges and the boss's top circle
+    blends = r["checks"].get("blends")
+    check(blends and len(blends) == 2, "blends not recorded: %r" % (blends,))
+    check(blends[0]["edges"] == 4 and blends[1]["edges"] == 1,
+          "selector edge counts %r, expected 4 then 1" % ([b["edges"] for b in blends],))
+    check(abs(blends[0]["removed"] - rounds) < 0.01,
+          "R12 corners removed %.3f, expected %.3f" % (blends[0]["removed"], rounds))
+    check(all(b["removed"] > 0 for b in blends), "a blend removed nothing: %r" % (blends,))
+
+    # the reference value must declare itself sampled, with a band, not a formula
+    ref = r["checks"]["reference"]
+    check(ref["sampled"] and ref["samples"] > 0 and ref["sigma"] > 0,
+          "the sampled reference is not reported: %r" % (ref,))
+
+    # 4 corner rounds + the cross hole + the boss; the chamfer is a cone, not a
+    # cylinder, so it is not in this count
+    cyl = r["checks"]["cylindrical_faces"]["actual"]
+    check(cyl == 6, "cylindrical faces=%d, expected 6 (4 rounds + hole + boss)" % cyl)
+
+    reset_result(name, verify=True)
+    rc, out = run("verify_part.py", [spec])
+    check(rc == 0, "verify exit %d\n%s" % (rc, out[-1200:]))
+    check(result_of(name, verify=True)["status"] == "ok",
+          "the independent verifier rejected the composed part")
+
+
 TESTS = [
     ("T1", "build with no arguments (backward compatibility)", T1_build_default),
     ("T2", "build from a spec file, volume checked independently", T2_build_from_spec),
@@ -300,6 +369,8 @@ TESTS = [
     ("T7", "exported STEP contains real geometry", T7_step_contains_geometry),
     ("T8", "part-recipe unit tests (no NX needed)", T8_recipe_unit_tests),
     ("T9", "every registered shape builds and verifies end to end", T9_other_shapes_build_and_verify),
+    ("T10", "a composed feature list builds in order, rounds included",
+     T10_composed_features_build_in_order),
 ]
 
 

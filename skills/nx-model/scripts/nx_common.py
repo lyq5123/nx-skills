@@ -221,6 +221,12 @@ def validate_part(spec):
     return recipes.validate(part_type, params)
 
 
+def part_tolerance(spec):
+    """Relative agreement the self-check should demand for this spec's shape."""
+    name = part_type_of(spec)
+    return recipes.tolerance(name) if recipes.has_recipe(name) else 1e-9
+
+
 def part_metrics(spec):
     """Analytic (volume, face count) for this spec's part type."""
     return _recipe_call(spec, recipes.metrics, "expected geometry")

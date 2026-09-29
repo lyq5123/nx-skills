@@ -215,26 +215,40 @@ def stage_volume(part, body, log, label):
     return vol
 
 
-def check_geometry(part, body, spec, log, result):
+def check_geometry(part, body, spec, log, result, volume_offset=0.0):
     """Compare the kernel against the recipe's analytic values.
 
     This is the whole point of the skill: a part that was built wrong must FAIL the
     run, not exit 0. Expected values come from the same recipe the verifier uses, so
     the two can never drift apart.
+
+    `volume_offset` is material the reference value does not model - in practice the
+    edges a blend or chamfer rounded off, which no closed form covers for an
+    arbitrary feature list. It is ADDED to what the kernel measured before the
+    comparison, so the check stays on the geometry the reference does describe, and
+    it is reported separately rather than folded in silently.
     """
     vol, n_faces, n_edges = measure(part, body)
     exp_vol, exp_faces = nxc.part_metrics(spec)
     exp_cyl = nxc.cylindrical_faces(spec)
     cyl = cylindrical_face_count(body)
+    compare = vol + volume_offset
 
     result["checks"]["volume"] = {"actual": round(vol, 6), "expected": round(exp_vol, 6),
-                                  "delta": round(abs(vol - exp_vol), 6)}
+                                  "delta": round(abs(compare - exp_vol), 6)}
+    if volume_offset:
+        result["checks"]["volume"]["rounded_off"] = round(volume_offset, 6)
+        result["checks"]["volume"]["compared"] = round(compare, 6)
     result["checks"]["faces"] = {"actual": n_faces, "expected": exp_faces}
     result["checks"]["edges"] = {"actual": n_edges}
     result["checks"]["cylindrical_faces"] = {"actual": cyl, "expected": exp_cyl}
 
     log.chk("volume %.3f mm^3  expected %.3f  delta %.4f"
-            % (vol, exp_vol, abs(vol - exp_vol)))
+            % (vol, exp_vol, abs(compare - exp_vol)))
+    if volume_offset:
+        log.chk("  of which %.3f was removed by blend/chamfer - the reference value "
+                "does not model those, so it is added back before comparing"
+                % volume_offset)
     if exp_faces is None:
         # Some shapes have no face count that can be derived honestly (the cradle
         # block: several blends and a groove meet on shared faces). Asserting a
@@ -244,14 +258,22 @@ def check_geometry(part, body, spec, log, result):
                 % (n_faces, n_edges))
     else:
         log.chk("faces=%d (expected %d)  edges=%d" % (n_faces, exp_faces, n_edges))
-    log.chk("cylindrical faces=%d (expected %d)" % (cyl, exp_cyl))
+    if exp_cyl is None:
+        # an arbitrary feature list has no derivable cylinder count either; assert
+        # nothing rather than assert a number copied from a previous run
+        log.chk("cylindrical faces=%d (not asserted for this shape)" % cyl)
+    else:
+        log.chk("cylindrical faces=%d (expected %d)" % (cyl, exp_cyl))
 
-    if abs(vol - exp_vol) >= 1e-3:
-        log.err("volume does not match the analytic value - the model is wrong")
+    tol = nxc.part_tolerance(spec)
+    if abs(compare - exp_vol) > tol * max(abs(exp_vol), 1.0):
+        log.err("volume is off by %.6f, beyond the %.1g relative agreement this shape "
+                "allows (sampled references are looser than closed forms)"
+                % (abs(compare - exp_vol), tol))
     if exp_faces is not None and n_faces != exp_faces:
         log.err("face count %d, expected %d - a feature did not apply as intended"
                 % (n_faces, exp_faces))
-    if cyl != exp_cyl:
+    if exp_cyl is not None and cyl != exp_cyl:
         log.err("cylindrical face count %d, expected %d - a hole or blend is missing"
                 % (cyl, exp_cyl))
     return body

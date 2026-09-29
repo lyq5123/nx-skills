@@ -22,12 +22,36 @@ SPECS = os.path.join(HERE, "specs")
 
 sys.path.insert(0, SCRIPTS)
 import nx_common as nxc
+import nx_compose as nxcmp
 import nx_recipes as nxr
 
 # Analytic reference values, taken from the geometry and cross-checked against
 # what NX measures. They are NOT copied from whatever the code currently
 # returns - that circularity is exactly what these tests defend against.
 DEFAULT_PARAMS = dict(nxc.DEFAULT_PLATE["params"])
+
+# -----------------------------------------------------------------------------
+# fixtures for the composed recipe
+# -----------------------------------------------------------------------------
+SMALL_PLATE = [{
+    "op": "profile", "plane": "xy", "thickness": 5.0,
+    "outline": [["line", 0.0, 0.0, 10.0, 0.0], ["line", 10.0, 0.0, 10.0, 10.0],
+                ["line", 10.0, 10.0, 0.0, 10.0], ["line", 0.0, 10.0, 0.0, 0.0]]}]
+SMALL_HOLE = {"op": "hole", "axis": "z", "at": [5.0, 5.0], "dia": 4.0, "through": True}
+SMALL_BOSS = {"op": "boss", "axis": "z", "at": [5.0, 5.0], "dia": 4.0, "height": 5.0}
+HOLE_ALONG_Y = {"op": "hole", "axis": "y", "at": [40.0, 10.0], "dia": 16.0,
+                "through": True}
+
+BOSS_HOLE = [
+    {"op": "profile", "plane": "xy", "thickness": 20.0,
+     "outline": [["line", 0.0, 0.0, 200.0, 0.0], ["line", 200.0, 0.0, 200.0, 160.0],
+                 ["line", 200.0, 160.0, 0.0, 160.0], ["line", 0.0, 160.0, 0.0, 0.0]]},
+    {"op": "hole", "axis": "z", "at": [30.0, 30.0], "dia": 20.0, "through": True},
+    {"op": "boss", "axis": "z", "at": [100.0, 80.0], "dia": 55.0, "height": 25.0},
+]
+# The closed form: plate, less the through hole, plus the 5 mm of the 55 boss that
+# stands proud of the 20 mm plate. NX measures 645595.962 for this part.
+BOSS_HOLE_EXACT = 200 * 160 * 20 - math.pi * 100 * 20 + math.pi * 27.5 ** 2 * 5
 
 
 def spec_from_fixture(fixture, **overrides):
@@ -480,11 +504,170 @@ class ProfileRecipeTests(unittest.TestCase):
              "params": dict(self.CAPSULE, holes=[[95, 10, 8.0]])}), [])
 
 
+class ComposedRecipeTests(unittest.TestCase):
+    """The feature-list recipe: a sequence of operations instead of one shape.
+
+    Its reference volume is SAMPLED rather than a closed form, so these tests do two
+    separate jobs: they pin the arithmetic that CAN be computed independently (the
+    closed form of a simple feature list, the boolean semantics, the geometry the
+    sampler is handed), and they pin the validation rules that stop a bad feature
+    list before NX is touched. They cannot make the sampler exact, and no test here
+    pretends otherwise - the band is asserted, not an equality.
+    """
+
+    def test_registered_with_an_alias_and_a_looser_tolerance(self):
+        self.assertIn("composed", nxr.known_parts())
+        self.assertEqual(nxr.canonical_name("compose"), "composed")
+        # its reference is sampled, so it must NOT claim the exact recipes' agreement
+        self.assertGreater(nxr.tolerance("composed"), nxr.tolerance("mounting_plate"))
+
+    def test_the_fixture_is_accepted(self):
+        self.assertEqual(nxc.validate_part(spec_from_fixture("composed_cover.json")), [])
+
+    def test_features_are_parsed_with_their_modes_and_discs(self):
+        bad = []
+        feats = nxcmp.parse_features(BOSS_HOLE, bad)
+        self.assertEqual(bad, [])
+        # a boss adds and a hole removes, whatever anyone typed
+        self.assertEqual([f["mode"] for f in feats], ["add", "cut", "add"])
+        self.assertEqual(feats[1]["_disc"], (30.0, 30.0, 10.0))
+        self.assertIsNone(feats[0].get("_disc"))
+
+        hole_y = nxcmp.parse_features([BOSS_HOLE[0], HOLE_ALONG_Y], [])[1]
+        # the axis and the plane are two views of the same thing: a hole along Y is
+        # a circle drawn in XZ, and "at" is then [x, z]
+        self.assertEqual(hole_y["plane"], "xz")
+        self.assertEqual(hole_y["at_uv"], (40.0, 10.0))
+
+    def test_a_hole_is_a_disc_not_a_polygon(self):
+        # A 48-gon would understate a hole's area by 0.29%, which biases the whole
+        # reference value; the sampler is handed the disc instead. The polygon stays
+        # only for the bounding box and the outline bookkeeping.
+        m = nxcmp.solid_models(nxcmp.parse_features(BOSS_HOLE, []))
+        self.assertIsNone(m[1]["poly"])
+        self.assertEqual(m[1]["disc"], (30.0, 30.0, 10.0))
+        self.assertIsNotNone(m[0]["disc"] is None and m[0]["poly"])
+
+    def test_reference_volume_matches_a_closed_form(self):
+        # plate + through hole + boss. Only 5 mm of the 25 mm boss stands proud, so
+        # the added term is pi*r^2*5 and not pi*r^2*25 - the first version of this
+        # expectation was wrong by exactly that, and the sampler was right.
+        rep = nxcmp.composed_report({"features": BOSS_HOLE})
+        self.assertLess(abs(rep["volume"] - BOSS_HOLE_EXACT), 4.0 * rep["sigma"],
+                        "sampled %.1f vs exact %.1f, more than 4 sigma (%.1f) apart"
+                        % (rep["volume"], BOSS_HOLE_EXACT, rep["sigma"]))
+
+    def test_the_last_operation_wins(self):
+        # the boolean semantics are sequential: a boss that exactly fills the hole
+        # before it leaves the plate as it started, and two identical additions are
+        # not counted twice.
+        rep_filled = nxcmp.composed_report({"features":
+                                            SMALL_PLATE + [SMALL_HOLE, SMALL_BOSS]})
+        rep_twice = nxcmp.composed_report({"features":
+                                           SMALL_PLATE + [SMALL_PLATE[0]]})
+        for rep in (rep_filled, rep_twice):
+            self.assertLess(abs(rep["volume"] - 500.0), 4.0 * rep["sigma"],
+                            "%.1f is not the plate's 500 mm^3" % rep["volume"])
+
+    def test_a_curved_leader_removes_what_the_walls_leave(self):
+        # sanity on the sampling itself: cutting a slot across one half of a plate
+        # must land near half the plate, not near all of it or none of it
+        rep = nxcmp.composed_report({"features": SMALL_PLATE + [
+            {"op": "profile", "plane": "xy", "mode": "cut", "thickness": 5.0,
+             "outline": [["line", 0.0, 0.0, 5.0, 0.0], ["line", 5.0, 0.0, 5.0, 10.0],
+                         ["line", 5.0, 10.0, 0.0, 10.0], ["line", 0.0, 10.0, 0.0, 0.0]]}]})
+        self.assertLess(abs(rep["volume"] - 250.0), 4.0 * rep["sigma"],
+                        "%.1f is not half of the 500 mm^3 plate" % rep["volume"])
+
+    def test_bad_feature_lists_are_rejected(self):
+        cases = [
+            ("non-empty list", None),
+            ("non-empty list", []),
+            ("unknown op", [{"op": "fillet", "r": 1.0}]),
+            ("must create material", [{"op": "blend", "r": 1.0,
+                                       "edges": {"parallel_to": "z"}}]),
+            ("must CREATE material", [{"op": "hole", "axis": "z", "at": [0, 0],
+                                       "dia": 5.0, "through": True}]),
+            ("must CREATE material", [dict(SMALL_PLATE[0], mode="cut")]),
+            ("through", [dict(SMALL_PLATE[0], through=True)]),
+            ("only makes sense for a cut", SMALL_PLATE + [
+                {"op": "boss", "axis": "z", "at": [5.0, 5.0], "dia": 2.0,
+                 "through": True}]),
+            ("contradicts", SMALL_PLATE + [
+                {"op": "hole", "axis": "z", "at": [5.0, 5.0], "dia": 2.0,
+                 "through": True, "mode": "add"}]),
+            ("contradicts", SMALL_PLATE + [
+                {"op": "boss", "axis": "z", "at": [5.0, 5.0], "dia": 2.0,
+                 "height": 3.0, "mode": "cut"}]),
+            ("axis must be", SMALL_PLATE + [{"op": "hole", "axis": "w",
+                                             "at": [5.0, 5.0], "dia": 2.0}]),
+            ("'at' must be [u, v]", SMALL_PLATE + [{"op": "hole", "axis": "z",
+                                                    "dia": 2.0}]),
+            ("plane must be", [dict(SMALL_PLATE[0], plane="xq")]),
+            ("'at' must be a number", [dict(SMALL_PLATE[0], at="top")]),
+            ("dia must be a positive", SMALL_PLATE + [{"op": "hole", "axis": "z",
+                                                       "at": [5.0, 5.0], "dia": 0}]),
+            ("needs 'thickness'", [{"op": "profile", "plane": "xy",
+                                    "outline": SMALL_PLATE[0]["outline"]}]),
+            ("thickness must be a positive", [dict(SMALL_PLATE[0], thickness=-5.0)]),
+            ("not a closed loop", [dict(SMALL_PLATE[0], outline=[
+                ["line", 0.0, 0.0, 10.0, 0.0], ["line", 10.0, 0.0, 10.0, 10.0],
+                ["line", 20.0, 10.0, 0.0, 10.0]])]),
+            ("needs an 'edges' selector", SMALL_PLATE + [{"op": "blend", "r": 1.0}]),
+            ("unknown selector key", SMALL_PLATE + [
+                {"op": "blend", "r": 1.0, "edges": {"face": 2}}]),
+            ("parallel_to must be", SMALL_PLATE + [
+                {"op": "chamfer", "c": 1.0, "edges": {"parallel_to": "w"}}]),
+            ("EARLIER feature", SMALL_PLATE + [
+                {"op": "blend", "r": 1.0, "edges": {"from_feature": 5}}]),
+            ("is itself a blend", SMALL_PLATE + [
+                {"op": "blend", "r": 1.0, "edges": {"from_feature": 0}},
+                {"op": "blend", "r": 1.0, "edges": {"from_feature": 1}}]),
+            ("non-empty map", SMALL_PLATE + [
+                {"op": "blend", "r": 1.0, "edges": {"mid_at": {}}}]),
+            ("only makes sense for a cut", SMALL_PLATE + [
+                {"op": "chamfer", "c": 1.0, "edges": {"parallel_to": "z"}},
+                {"op": "profile", "plane": "xy", "through": True, "mode": "add",
+                 "outline": SMALL_PLATE[0]["outline"]}]),
+        ]
+        for needle, feats in cases:
+            problems = nxc.validate_part({"part": "composed", "params": {"features": feats}})
+            self.assertTrue(any(needle in p for p in problems),
+                            "%r not caught, got %r" % (needle, problems))
+
+        # and the same list without the offending feature is fine, so the table
+        # above is not passing for the wrong reason
+        self.assertEqual(nxc.validate_part(
+            {"part": "composed", "params": {"features":
+                                            SMALL_PLATE + [SMALL_HOLE, SMALL_BOSS]}}), [])
+
+    def test_bounding_box_covers_every_solid_feature(self):
+        feats = nxcmp.parse_features(BOSS_HOLE, [])
+        lo, hi = nxcmp.bounding_box(feats)
+        for f in feats:
+            if f["op"] not in nxcmp._SOLID_OPS:
+                continue
+            ua, va, na = nxcmp.plane_axes(f["plane"])
+            for s in f["_segments"]:
+                for u, v in (nxr._seg_start(s), nxr._seg_end(s)):
+                    for axis, val in ((ua, u), (va, v)):
+                        i = "xyz".index(axis)
+                        self.assertLessEqual(lo[i], val)
+                        self.assertGreaterEqual(hi[i], val)
+            if f["thickness"] is None:
+                continue          # a through cut reaches past the box on purpose
+            offsets = [f["at_offset"] + f["start"],
+                       f["at_offset"] + f["start"] + f["thickness"]]
+            i = "xyz".index(na)
+            self.assertLessEqual(lo[i], min(offsets))
+            self.assertGreaterEqual(hi[i], max(offsets))
+
+
 class RegistryCoverageTests(unittest.TestCase):
     def test_all_shapes_are_registered(self):
         self.assertEqual(nxr.known_parts(),
-                         ["circular_flange", "extruded_profile", "l_bracket",
-                          "mounting_plate", "shaft_cradle"])
+                         ["circular_flange", "composed", "extruded_profile",
+                          "l_bracket", "mounting_plate", "shaft_cradle"])
 
     def test_every_recipe_exposes_params_and_rules(self):
         for name in nxr.known_parts():

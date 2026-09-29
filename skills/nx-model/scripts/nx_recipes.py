@@ -38,14 +38,24 @@ def unknown_part_message(name):
 _RECIPES = {}
 
 
-def register(name, param_keys, validate, metrics, cylindrical_faces, aliases=()):
-    """Register one part type. `aliases` are alternate accepted spec values."""
+def register(name, param_keys, validate, metrics, cylindrical_faces, aliases=(),
+             tolerance=1e-9):
+    """Register one part type.
+
+    `aliases` are alternate accepted spec values. `tolerance` is the RELATIVE
+    agreement the self-check demands between the kernel and `metrics`. It is a
+    parameter because not every reference value is exact: the named recipes compute
+    a closed form and agree to ~1e-11, while the composed recipe SAMPLES its volume
+    and is only good to about a percent. Insisting on 1e-9 there would fail every
+    build; accepting 1e-9 here would let a wrong model pass.
+    """
     entry = {
         "name": name,
         "param_keys": tuple(param_keys),
         "validate": validate,
         "metrics": metrics,
         "cylindrical_faces": cylindrical_faces,
+        "tolerance": float(tolerance),
     }
     _RECIPES[name] = entry
     for alias in aliases:
@@ -80,6 +90,11 @@ def _lookup(name):
 
 def param_keys(name):
     return _lookup(name)["param_keys"]
+
+
+def tolerance(name):
+    """Relative agreement required between the kernel and this recipe's metrics."""
+    return _lookup(name)["tolerance"]
 
 
 def validate(name, params):
@@ -1036,3 +1051,18 @@ register(CRADLE,
          cradle_metrics,
          cradle_cylindrical_faces,
          aliases=("cradle", "saddle"))
+
+
+# -----------------------------------------------------------------------------
+# recipe: composed - a sequence of operations rather than one shape
+#
+# It is NOT registered here. That recipe lives in nx_compose.py, which imports the
+# outline helpers above, and it registers itself at the bottom of its own file. The
+# import below is what makes `import nx_recipes` alone know about it - and it is
+# safe in both directions only because nx_compose touches no name in this module
+# until it is fully loaded, and this file defines everything nx_compose needs above
+# this line. Reading _compose.<something> here (the obvious `register(_compose...)`)
+# is what makes the other import order fail with AttributeError on a half-built
+# module; that mistake was made once already.
+# -----------------------------------------------------------------------------
+import nx_compose          # noqa: F401  (imported for its registration side effect)

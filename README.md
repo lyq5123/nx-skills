@@ -120,16 +120,41 @@ build; the numbers are what the tests assert.
 | `l_bracket` (`bracket`) | `base_l` `base_t` `wall_t` `total_h` `width` `hole_d` `hole_inset_x` | 80/12/10/60 wide 40, 2× D6 → 55338.053 mm³, 10 faces |
 | `shaft_cradle` (`cradle`) | base plate + block with a semicircular groove, ears with cross-holes, rounded corners (a **multi-feature** example, not a single extrusion; its default dimensions come from a drawing reading that is provisional) | see `nx_recipes.py` |
 | `extruded_profile` (`profile`) | **any outline of lines and circular arcs**: `outline` `[["line",x1,y1,x2,y2], ["arc",xs,ys,xm,ym,xe,ye], …]` (or the older `points` form), `thickness`, `holes` `[[x,y,dia],…]` | a hexagon 100/140/80 wide 6 with 2× D12 → 65842.832 mm³, 10 faces; a 120×80×10 plate with four R10 corners and 2× D12 → 92879.646 mm³, 12 faces |
+| `composed` (`compose`) | **any ordered list of operations** in `features`: `profile` (outline extruded on plane `xy`/`xz`/`yz`, `mode` add or cut), `hole` / `boss` (`axis` x/y/z, `at`, `dia`, `through` or `thickness`/`height`), `blend` (`r`), `chamfer` (`c`) — the last two taking an `edges` selector: `from_feature`, `parallel_to`, `mid_at` | 200×160×20 plate + cross hole D16 + boss D55×25 + R12 on four corners + C3 on the boss rim → 616487.755 mm³, 14 faces, 6 cylinders + 1 cone; the sampler's own reference for it is 619145 ± 2326 |
 
-`extruded_profile` is the general-purpose one: most flat components on a drawing — brackets, covers,
-gussets, link plates, channels — are an outline extruded to a thickness, and rounded corners, slots and
-rounded ends are all expressible because the outline takes circular arcs as well as lines (each arc's
-area is exact, by Green's theorem). It reproduces the named recipes exactly when their outline is
-written the same way, and there is a test asserting that. What it cannot do is a **spline or other
-non-circular curve** in the outline, a **revolved** part, or anything that is **not a
+`extruded_profile` is the general-purpose one for **flat** parts: most components on a drawing —
+brackets, covers, gussets, link plates, channels — are an outline extruded to a thickness, and rounded
+corners, slots and rounded ends are all expressible because the outline takes circular arcs as well as
+lines (each arc's area is exact, by Green's theorem). It reproduces the named recipes exactly when their
+outline is written the same way, and there is a test asserting that. What it cannot do is a **spline or
+other non-circular curve** in the outline, a **revolved** part, or anything that is **not a
 constant-thickness extrusion** (step, pocket, boss, shell, draft).
 
-Each shape has its own builder (`build_plate.py`, `build_flange.py`, `build_bracket.py`) and its own
+`composed` is the general-purpose one for **the rest of that list**: a list of operations executed in
+order, on any of the three planes, adding and cutting. The last operation covering a point wins, so a
+boss placed after a hole fills it back in. Blends and chamfers take their edges from a **geometric
+selector**, never an index:
+
+```json
+{"part": "composed", "params": {"features": [
+  {"op": "profile", "plane": "xy", "thickness": 20, "outline": [["line", 0,0,200,0], "…"]},
+  {"op": "blend", "r": 12, "edges": {"parallel_to": "z", "mid_at": {"z": 10}}},
+  {"op": "hole",  "axis": "y", "at": [40, 10], "dia": 16, "through": true},
+  {"op": "boss",  "axis": "z", "at": [100, 80], "dia": 55, "height": 25},
+  {"op": "chamfer", "c": 3, "edges": {"from_feature": 3, "mid_at": {"z": 25}}}
+]}}
+```
+
+Its volume has **no closed form**, so the reference value is an independent **Monte-Carlo sample** of
+the same feature list: a real check — it never asks NX, so a bad boolean or a missing feature shows up
+— but a **~1% band rather than an equality**, with the sampling error printed on every run. Blends and
+chamfers are not modelled by that reference at all (they cannot be, in general), so the run measures
+what each round actually removed, asserts it is not zero, and adds it back before the comparison.
+Face counts are not asserted for this shape, for the same reason. Every one of those limits is in the
+run log, and `skills/nx-model/SKILL.md` says what it means for reporting a part.
+
+Each shape has its own builder (`build_plate.py`, `build_flange.py`, `build_bracket.py`,
+`build_cradle.py`, `build_profile.py`, `build_composed.py`) and its own
 entry in `nx_recipes.py` holding three things: the parameters it takes, the rules that reject bad
 combinations, and the analytic volume/face-count the verifier measures against. Adding a shape means
 adding a row there and a builder beside it — **the existing journals do not change.**
@@ -144,9 +169,10 @@ python skills/nx-model/tests/run_tests.py     # ~7 min, needs NX installed
 python skills/nx-model/tests/run_tests.py T4  # a single test
 ```
 
-Nine tests, including a **negative control** (the verifier must *reject* a part built to different
-dimensions — otherwise a verifier that always passes looks green) and conflict fixtures that
-must all be rejected. Any Python 3 can run the harness; it only shells out to NX.
+Ten tests, including a **negative control** (the verifier must *reject* a part built to different
+dimensions — otherwise a verifier that always passes looks green), conflict fixtures that must all be
+rejected, and a five-operation composed part whose blends, selectors and analytic volume are each
+asserted. Any Python 3 can run the harness; it only shells out to NX.
 
 ## What this does not do
 
@@ -158,13 +184,21 @@ Stated plainly, because the honest scope is more useful than an optimistic one:
   catch a misread dimension**: it compares NX's measurement against a value derived from the same
   spec, so a wrong number moves both sides together and the run stays green.
 - **No drafting.** No drawing sheets, projected views, annotations, PDF or DWG.
-- **Five shapes, one of them general.** The registry covers a rectangular plate, a circular flange,
-  an L bracket, a shaft cradle (a multi-feature example), and `extruded_profile` — any outline of lines and arcs, extruded to a thickness (see
-  [Shapes](#shapes) below). That last one covers most flat parts, rounded corners and slots included.
-  Outside it: splines and other non-circular curves, revolved parts, and anything that is not a
-  constant-thickness extrusion. Those need a new recipe —
-  geometry formula, validation rules, builder — and the formula matters as much as the geometry,
-  because the verifier compares against it; a recipe with a wrong formula fails its own build.
+- **Six shapes, two of them general.** The registry covers a rectangular plate, a circular flange, an
+  L bracket, a shaft cradle, `extruded_profile` — any outline of lines and arcs, extruded to a
+  thickness — and `composed` — any ordered list of extrusions, holes, bosses, blends and chamfers (see
+  [Shapes](#shapes) below). Together the two general ones cover most of what a drawing shows.
+  Outside them: splines and other non-circular curves, revolved parts, and swept, lofted or helical
+  features (threads, springs, impeller blades). Those need a new recipe — geometry formula, validation
+  rules, builder — and the formula matters as much as the geometry, because the verifier compares
+  against it; a recipe with a wrong formula fails its own build.
+- **`composed` is verified to ~1%, not to 0.0000.** Its volume reference is sampled and it does not
+  model blends or chamfers; the named recipes and `extruded_profile` are exact. If a composed part
+  needs to be *proved* rather than *checked*, write it as a named recipe or an `extruded_profile` where
+  a closed form exists.
+- **Rounds on a composed part are checked for effect, not for position.** The run proves a blend
+  removed material from the edges its selector matched; that the selector named the *right* edges is a
+  reading of the drawing, which is the agent's job, not the code's.
 - **`nx-gui` cannot reach menus.** Pull-down menus, dropdown contents and graphics-area filter bars
   are invisible to both screenshots and accessibility on NX 2406, so commands behind them have to be
   done by hand. Selecting an existing sketch's curves as an extrude section is unsolved; the

@@ -87,8 +87,9 @@ A spec is a JSON object. Copy `tests/specs/plate_ok.json` as a starting point:
 ```
 
 - **`part`** picks the shape: `mounting_plate` (the default when omitted), `circular_flange`
-  (`flange`), `l_bracket` (`bracket`), or `extruded_profile` (`profile`). Each takes a different set
-  of `params` - see the tables under "Building from a drawing" above - and each has its own builder.
+  (`flange`), `l_bracket` (`bracket`), `extruded_profile` (`profile`), or `composed` (`compose`).
+  Each takes a different set of `params` - see the tables under "Building from a drawing" above - and
+  each has its own builder.
 - **`extruded_profile` takes structured params**, not scalars: `"thickness": number`,
   `"holes": [[x, y, dia], ...]` (optional), and the boundary as either
   - `"outline"`: an ordered list of segments, each
@@ -185,16 +186,63 @@ uncertain values are exposed as parameters (`top_setback`, `base_hole_*`, `ear_h
 against the kernel); its *defaults* are not confirmed against the drawing. Treat it as a template, not
 as "exercise 16 answered".
 
-**And then the general one, which is the usual answer:**
+**And then the two general ones, which are the usual answer:**
 
 | `part` | Shape | Parameters |
 | --- | --- | --- |
 | `extruded_profile` (`profile`) | **any outline of lines and circular arcs** extruded to a thickness, with through-holes | `outline` = `[["line",..], ["arc",..], ...]` or `points`, `thickness`, `holes` |
+| `composed` (`compose`) | **any ordered list of operations** - extrusions on any of the three planes, holes and bosses along any axis, blends and chamfers on edges picked by geometry | `features` = `[{"op": ...}, ...]` - see below |
 
 `extruded_profile` covers most flat components on a drawing - brackets, covers, gussets, link plates,
 channels, gaskets, and anything with rounded corners, slots or rounded ends. Its volume is exact (shoelace area ×
 thickness − hole cylinders), so it gets the same verification as everything else, and it reproduces
 the named recipes exactly when their outline is written as points (there is a test asserting that).
+
+`composed` is the one to reach for when the part is neither flat nor one of the named shapes - a
+**step, a pocket, a boss, a plate with something growing out of it**. It is a list of operations,
+executed in order:
+
+```json
+{"part": "composed", "params": {"features": [
+  {"op": "profile", "plane": "xy", "thickness": 20, "outline": [["line", 0,0,200,0], ...]},
+  {"op": "profile", "plane": "xz", "at": 40, "mode": "cut", "thickness": 8,
+   "outline": [["line", 20,20,30,20], ...]},
+  {"op": "hole",  "axis": "y", "at": [100, 10], "dia": 16, "through": true},
+  {"op": "boss",  "axis": "z", "at": [100, 80], "dia": 55, "height": 25},
+  {"op": "blend", "r": 12, "edges": {"parallel_to": "z"}},
+  {"op": "chamfer", "c": 3, "edges": {"from_feature": 4, "mid_at": {"z": 25}}}
+]}}
+```
+
+- **`plane`** is `xy`, `xz` or `yz`; `at` is that plane's offset along its normal. A hole/boss takes
+  an **`axis`** instead, and `at` is then `[u, v]` in the plane perpendicular to it - a hole along Y
+  is a circle drawn in XZ; the two are two views of the same thing.
+- **`op`** is `profile`, `hole`, `boss`, `blend` or `chamfer`. A **boss always adds** and a **hole
+  always removes**; only a `profile` chooses, with `"mode": "add"` (default) or `"cut"`. Saying
+  `"mode": "cut"` on a boss is **rejected**, not quietly ignored.
+- **`through: true`** cuts right through the body. It is refused on anything that adds material - an
+  addition with no end would extend without limit. Otherwise give a `thickness` (a boss may say
+  `height`), and `start` to begin somewhere other than the plane's own offset.
+- **`edges`** picks the edges a blend or chamfer acts on, by geometry and never by index:
+  `{"from_feature": n}` (the edges feature *n* created), `{"parallel_to": "x"|"y"|"z"}`,
+  `{"mid_at": {"z": 20}}` (an edge whose midpoint is at that coordinate). The keys combine with AND,
+  so `{"from_feature": 4, "mid_at": {"z": 25}}` is "the top rim of that boss". A selector that
+  matches nothing **fails the run**.
+- **Order matters.** The operations are applied in sequence and the last one covering a point wins -
+  a boss placed after a hole fills it back in.
+
+**What is verified for a `composed` part, and what is not** - read this before reporting one:
+
+- The volume check compares NX's measurement against an **independent Monte-Carlo sample** of the same
+  feature list - not a closed form, because a list of operations has none. It is a **~1% band, not an
+  equality**: the run prints the sampling error it actually got, and the check demands 1%.
+- **Blends and chamfers are not modelled by that reference**, and in general they cannot be. So the run
+  adds back what they removed before comparing (otherwise a heavily rounded part would fail for being
+  correctly rounded), and it reports each round's edge count and removed volume. A round that removed
+  nothing fails the run; a round applied to the *wrong* edges would not be caught by the volume - check
+  it against the drawing yourself.
+- Face counts are **not asserted** for a composed part: there is no honest count for an arbitrary
+  feature list, and a number copied from a previous run is self-consistency, not verification.
 
 **Say you cannot build it, before doing any work, when the part is:**
 
@@ -203,7 +251,7 @@ the named recipes exactly when their outline is written as points (there is a te
   there is no exact area formula behind them.
 - **revolved** - a shaft, bushing, or anything drawn as a lathe part. No recipe, and its volume needs
   a different formula.
-- **not a constant-thickness extrusion** - a step, a pocket, a boss, a shell, a draft.
+- **built from a swept, lofted or helical feature** - a screw thread, a spring, an impeller blade.
 - **threaded, splined, geared, or heat-treated in ways the model must show.**
 
 Adding one of those means writing a recipe (geometry formula + validation rules) plus a builder that
@@ -298,11 +346,13 @@ python tests/run_tests.py T4        # one test by prefix
 python tests/test_recipes.py        # ~0.01 s, no NX: the recipe rules and formulas
 ```
 
-Nine tests cover the no-argument path (backward compatibility), a spec-driven build with an
+Ten tests cover the no-argument path (backward compatibility), a spec-driven build with an
 **independently** computed volume, the verifier agreeing, the verifier *rejecting* a part built to
 other dimensions (the negative control - without it a verifier that always passes looks green), each
-parameter-conflict class, bad invocations, STEP content, the recipe unit tests, and **every registered
-shape building and verifying end to end**. Exit code 0 = all passed. Run it after touching any script.
+parameter-conflict class, bad invocations, STEP content, the recipe unit tests, **every registered
+shape building and verifying end to end**, and a **five-operation composed part** whose blends,
+selectors and analytic volume are each asserted. Exit code 0 = all passed. Run it after touching any
+script.
 
 ## Showing the part in the user's open NX session
 
@@ -376,6 +426,8 @@ logical step.
 | `scripts/build_plate.py` | the plate builder - geometry only; copy it to start a new shape |
 | `scripts/build_flange.py` / `build_bracket.py` | the other two named shapes |
 | `scripts/build_profile.py` | the generic one: any outline of lines and circular arcs, extruded |
+| `scripts/nx_compose.py` | the feature-list recipe: operations, planes, edge selectors, and the Monte-Carlo reference volume (plain Python) |
+| `scripts/build_composed.py` | the executor for a feature list - multi-plane extrusions, unites and cuts, blends/chamfers by selector |
 | `scripts/verify_part.py` | measuring a finished part against its spec, whatever shape it is |
 | `scripts/show_in_nx.py` | opening the built part in the user's NX (plain Python, not a journal) |
 | `scripts/check_step.py` | proving a STEP export actually contains geometry |

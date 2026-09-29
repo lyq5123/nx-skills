@@ -166,6 +166,41 @@ One more environment trap worth knowing: on a 2560×1440 display the raster came
 1280×768 — a **2× downscale**, which put the ribbon's tab row and its tool row about **9 pixels
 apart**. A small misreading then lands on the neighbouring tab.
 
+## 11. A part as a list of operations, and how to verify one
+
+`composed` (in `nx_compose.py` + `build_composed.py`) executes a feature list instead of hard-coding a
+shape. Four things in it were learned the hard way.
+
+**A circle is not a polygon.** The reference volume for a feature list is a Monte-Carlo sample, and a
+sample needs a yes/no inside test — so a hole was first modelled as a 48-sided polygon. Handing that
+same polygon to NX built a **faceted prism where a cylinder belongs**: `cylindrical faces = 0`, and the
+volume was off by only 0.003%, which no volume check would ever have noticed. The fix is two-track —
+NX gets a real 360° arc, the sampler gets an exact **disc** test. The lesson generalises: a numerical
+reference and the geometry it is compared against must not share an approximation. What caught it was
+the *topology count*, not the number.
+
+**Blends cannot be in the reference, so they cannot be silently absent either.** No closed form covers
+an arbitrary set of rounded edges, so the sampler ignores blends and chamfers entirely. Left there, a
+heavily rounded part would fail the volume check for being correctly rounded, and a part whose blend
+never applied would pass looking perfect. So the build measures what each round actually removed,
+requires it to be **greater than zero**, adds it back before the volume comparison, and prints it. That
+catches "the feature did not apply"; it cannot catch "it applied to the wrong edges" — which is a
+reading of the drawing, and is stated as the user's call rather than dressed up as verification.
+
+**Tolerance belongs to the recipe, not to the checker.** The named recipes have closed forms and agree
+with NX to ~1e-11; the composed one is sampled and deserves ~1%. `register(..., tolerance=...)` carries
+that, and the self-check and the independent verifier both read it. One constant for all shapes would
+either fail every composed build (1e-9) or let a wrong named-shape build pass (1%).
+`verify_part.py` prints the band when it is loose, so "delta 2657" is not read as a near miss on a
+shape whose whole allowance is ±2326.
+
+**A spec that states a contradiction is rejected, not overruled.** `"op": "boss", "mode": "cut"` and
+`"hole", "mode": "add"` are refused. Rewriting the mode silently is the wrong default: someone who
+wrote the opposite of what the shape does was thinking of something else, and quietly building what
+they did not ask for is how a drawing gets misread without anyone noticing. The same reason puts
+`"through": true` off limits for anything that adds material — an addition with no end extends without
+limit, and the sampler would have filled its entire bounding box with solid.
+
 ---
 
 ## Verified vs unverified
@@ -177,6 +212,19 @@ values exactly (87562.939 / 11 faces and 87013.558 / 15 faces); the test suite; 
 shape; sibling imports; exit-code behaviour; conflict rejection for five classes with no files
 produced; and, for `nx-gui`, that ribbon clicks open the intended dialog, that dialogs are fully
 readable/writable, that graphics face picks work, and that a sketch can be created end to end.
+
+**Verified for `composed`, against hand-computed numbers:** a 200x160x20 plate, a blend on the four
+corner edges found by selector (removed 2472.213, hand value 2472.213), a D16 cross hole along Y
+(32169.909 vs 32169.911), a D55 boss (11879.147 vs 11879.147), and a C3 chamfer on one edge of the
+boss's own edge set (749.270) — total within 0.002 mm^3 of the independently computed volume, with
+`Feature.GetEdges()` still returning a feature's own edges after later booleans. The **sampled**
+reference for that part is 619145 +/- 2326.
+
+**Not verified for `composed`:** whether a *selector* names the edges the drawing intends (only that
+it matched some edge, and that rounding them removed material); the ordering of operations that cut
+and re-fill the same region in ways the sampler and the kernel could disagree about; and any part whose
+sampled reference lands near the 1% boundary, where the answer is "rerun with more samples", not a
+verdict.
 
 **Not verified:** anything about drafting (there is none); the `绘制截面` route past the point where
 the sketch opens; extrude-section selection from existing sketch curves; and the

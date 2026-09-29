@@ -116,8 +116,21 @@ def _verify(spec, params, p, log, result):
         else:
             log.chk("  faces=%d (expect %d)  edges=%d" % (n_faces, exp_faces, n_edges))
 
-        if delta >= 1e-3:
-            log.err("volume mismatch: off by %.6f mm^3" % delta)
+        tol = nxc.part_tolerance(spec)
+        if tol > 1e-6:
+            # Not a contradiction of the line above, and it must not be read as one:
+            # the reference for a feature list is SAMPLED and models no blend or
+            # chamfer, so it is a band rather than an equality. This check therefore
+            # covers the solid operations only - any round the build applied moves
+            # the measured volume DOWN inside that band, and one that failed to apply
+            # would leave the volume looking perfect. build_composed.py reports the
+            # material each round actually removed; that is where rounds are checked.
+            log.chk("  this shape's reference value is sampled and models no "
+                    "blend/chamfer: +-%.1g%% band, solid operations only"
+                    % (tol * 100.0))
+        if delta > tol * max(abs(exp_vol), 1.0):
+            log.err("volume mismatch: off by %.6f mm^3, beyond the %.1g relative "
+                    "agreement this shape allows" % (delta, tol))
         if exp_faces is not None and n_faces != exp_faces:
             log.err("face count mismatch: %d vs expected %d" % (n_faces, exp_faces))
 
@@ -127,10 +140,13 @@ def _verify(spec, params, p, log, result):
                if f.SolidFaceType == NXOpen.Face.FaceType.Cylindrical]
         exp_cyl = nxc.cylindrical_faces(spec)
         result["checks"]["cylindrical_faces"] = {"actual": len(cyl), "expected": exp_cyl}
-        log.chk("  cylindrical faces=%d (expect %d)" % (len(cyl), exp_cyl))
-        if len(cyl) != exp_cyl:
-            log.err("cylindrical face count %d, expected %d - a hole or fillet is missing"
-                    % (len(cyl), exp_cyl))
+        if exp_cyl is None:
+            log.chk("  cylindrical faces=%d (not asserted for this shape)" % len(cyl))
+        else:
+            log.chk("  cylindrical faces=%d (expect %d)" % (len(cyl), exp_cyl))
+            if len(cyl) != exp_cyl:
+                log.err("cylindrical face count %d, expected %d - a hole or fillet "
+                        "is missing" % (len(cyl), exp_cyl))
 
     # STEP presence, if the build was asked to export one
     if spec.get("export", {}).get("step", True):
