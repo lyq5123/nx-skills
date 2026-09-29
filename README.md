@@ -121,6 +121,8 @@ build; the numbers are what the tests assert.
 | `shaft_cradle` (`cradle`) | base plate + block with a semicircular groove, ears with cross-holes, rounded corners (a **multi-feature** example, not a single extrusion; its default dimensions come from a drawing reading that is provisional) | see `nx_recipes.py` |
 | `extruded_profile` (`profile`) | **any outline of lines and circular arcs**: `outline` `[["line",x1,y1,x2,y2], ["arc",xs,ys,xm,ym,xe,ye], …]` (or the older `points` form), `thickness`, `holes` `[[x,y,dia],…]` | a hexagon 100/140/80 wide 6 with 2× D12 → 65842.832 mm³, 10 faces; a 120×80×10 plate with four R10 corners and 2× D12 → 92879.646 mm³, 12 faces |
 | `composed` (`compose`) | **any ordered list of operations** in `features`: `profile` (outline extruded on plane `xy`/`xz`/`yz`, `mode` add or cut), `hole` / `boss` (`axis` x/y/z, `at`, `dia`, `through` or `thickness`/`height`), `blend` (`r`), `chamfer` (`c`) — the last two taking an `edges` selector: `from_feature`, `parallel_to`, `mid_at` | 200×160×20 plate + cross hole D16 + boss D55×25 + R12 on four corners + C3 on the boss rim → 616487.755 mm³, 14 faces, 6 cylinders + 1 cone; the sampler's own reference for it is 619145 ± 2326 |
+| `laptop_stand` (`stand`) | inclined top plate + front stop lip + two side ribs; optional rib lightening holes, a cable hole and R-blends on the lip and plate edges | 280/250/18°/8/6/12/15/15 + D36 rib hole, D30 cable hole, R3 → 790296.093 mm³, 22 faces |
+| `laptop_stand_kd` | **the same stand as a knock-down kit**: one spec describes ONE PIECE of an assembly — `piece` = `plate` / `rib` / `screw` | plate 644384.609 mm³ / 22 faces (D9×3 head pockets in its top face + D5.5 clearance holes), rib 120883.479 / 11, screw 524.829 / 12 |
 
 `extruded_profile` is the general-purpose one for **flat** parts: most components on a drawing —
 brackets, covers, gussets, link plates, channels — are an outline extruded to a thickness, and rounded
@@ -153,6 +155,18 @@ what each round actually removed, asserts it is not zero, and adds it back befor
 Face counts are not asserted for this shape, for the same reason. Every one of those limits is in the
 run log, and `skills/nx-model/SKILL.md` says what it means for reporting a part.
 
+`laptop_stand_kd` is the only part type whose spec describes **one piece of an assembly**, and
+`build_laptop_stand_kit.py` turns the three verified pieces into **two assembly files**: `<kit>.prt` in
+working position and `<kit>_exploded.prt` with the components displaced along the plate normal, so the
+disassembly order is visible. Components are placed by **coordinate** — origin and orientation derived
+from the same recipe geometry the pieces were built to — not by constraint solving, so the screws land
+in their holes by construction and stay exact however the assembly is manipulated afterwards. An
+assembly has no volume of its own, so `verify_kit.py` checks **component counts and names** in the
+saved assembly instead, and each piece is measured by `verify_part.py` like any other part. The M5
+fastener constants (head D8.5×3, hex socket AF4×2.75, pocket D9×3, clearance +0.5) are deliberately not
+spec'd — they are a system, and the validation rules enforce the *joint* (the `plate_t` + tap depth
+stack has to fit under the head with at least 1 mm spare), not just the piece.
+
 Each shape has its own builder (`build_plate.py`, `build_flange.py`, `build_bracket.py`,
 `build_cradle.py`, `build_profile.py`, `build_composed.py`) and its own
 entry in `nx_recipes.py` holding three things: the parameters it takes, the rules that reject bad
@@ -184,10 +198,11 @@ Stated plainly, because the honest scope is more useful than an optimistic one:
   catch a misread dimension**: it compares NX's measurement against a value derived from the same
   spec, so a wrong number moves both sides together and the run stays green.
 - **No drafting.** No drawing sheets, projected views, annotations, PDF or DWG.
-- **Six shapes, two of them general.** The registry covers a rectangular plate, a circular flange, an
-  L bracket, a shaft cradle, `extruded_profile` — any outline of lines and arcs, extruded to a
-  thickness — and `composed` — any ordered list of extrusions, holes, bosses, blends and chamfers (see
-  [Shapes](#shapes) below). Together the two general ones cover most of what a drawing shows.
+- **Eight shapes, two of them general.** The registry covers a rectangular plate, a circular flange,
+  an L bracket, a shaft cradle, an inclined laptop stand and that stand as a knock-down kit,
+  `extruded_profile` — any outline of lines and arcs, extruded to a thickness — and `composed` — any
+  ordered list of extrusions, holes, bosses, blends and chamfers (see [Shapes](#shapes) below).
+  Together the two general ones cover most of what a drawing shows.
   Outside them: splines and other non-circular curves, revolved parts, and swept, lofted or helical
   features (threads, springs, impeller blades). Those need a new recipe — geometry formula, validation
   rules, builder — and the formula matters as much as the geometry, because the verifier compares

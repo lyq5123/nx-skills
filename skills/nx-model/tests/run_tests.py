@@ -301,13 +301,23 @@ def T9_other_shapes_build_and_verify():
             ("bracket_ok.json", "t9_bracket", 128638.274876, 10),
             ("profile_ok.json", "t9_profile", 65842.831974, 10),
             ("outline_arcs_ok.json", "t9_arcs", 92879.645943, 12),
+            ("laptop_stand.json", "t9_stand", 790296.0927548, 22),
+            ("laptop_stand_kd.json", "t9_kd_plate", 644384.6092651, 22),
+            ("laptop_stand_kd.json", "t9_kd_rib", 120883.4789863, 11),
+            ("laptop_stand_kd.json", "t9_kd_screw", 524.8290158, 12),
             ("cradle_ok.json", "t9_cradle", 57465.466, None)):
-        spec = spec_path(fixture, name=name)
+        spec = spec_path(fixture, name=name,
+                         params={"piece": name.rsplit("_", 1)[1]}
+                         if "kd_" in name else None)
         reset_result(name)
         journal = {"t9_flange": "build_flange.py",
                    "t9_bracket": "build_bracket.py",
                    "t9_profile": "build_profile.py",
                    "t9_arcs": "build_profile.py",
+                   "t9_stand": "build_laptop_stand.py",
+                   "t9_kd_plate": "build_laptop_stand_kd.py",
+                   "t9_kd_rib": "build_laptop_stand_kd.py",
+                   "t9_kd_screw": "build_laptop_stand_kd.py",
                    "t9_cradle": "build_cradle.py"}[name]
         rc, out = run(journal, [spec])
         check(rc == 0, "%s: build exit %d\n%s" % (name, rc, out[-900:]))

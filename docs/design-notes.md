@@ -201,6 +201,40 @@ they did not ask for is how a drawing gets misread without anyone noticing. The 
 `"through": true` off limits for anything that adds material — an addition with no end extends without
 limit, and the sampler would have filled its entire bounding box with solid.
 
+## 12. An assembly is not a part, so it is verified differently
+
+`build_laptop_stand_kit.py` places verified pieces into two assembly files - one in working position,
+one exploded along the plate normal. Five things the first live run taught, none of them obvious from
+the API stubs:
+
+- **An assembly has no volume of its own.** Every other shape here is verified by measuring the solid
+  the kernel produced; a kit cannot be. `verify_kit.py` opens the SAVED assemblies and checks
+  **component counts and names** instead, and the pieces are measured individually by
+  `verify_part.py` - so the pieces carry the numeric proof and the assembly carries the structure.
+- **`OpenBaseDisplay` on a file that is already open raises "File already exists".** A kit that places
+  the same rib twice and the same screw four times must cache loaded parts and reuse them.
+- **NX uppercases component names.** Compare `.upper()` when checking them.
+- **`Matrix3x3` columns are the images of the local axes**, so column 3 maps local +Z. With the screw's
+  shank modelled along local −Z, the shank direction is *minus* column 3 - test the column, not the
+  row index that happens to look like Z.
+- **Placement is by coordinate, not constraint solving.** Origins and orientations are derived from the
+  same recipe geometry the pieces were built to, so the screws land in their holes by construction and
+  the positions stay exact no matter how the assembly is manipulated afterwards - while the components
+  remain freely removable in the GUI.
+
+The joint itself is where the design work went, and it is a reminder that a fastener is a *system*:
+
+- **Pockets in the plate's top face beat countersinks.** A 45-degree seat needs the head cone to match
+  and sat 0.85 mm proud; a flat D9x3 pocket puts the head flush so the laptop slides over it.
+- **The under-head length must exceed plate thickness + tap depth with at least 1 mm spare.** A 16 mm
+  screw was 2 mm short of making the joint; 20 mm works.
+- **Overlapping removals break an analytic volume.** A D5.5 through-hole only cuts material *below* the
+  D9 pocket, so its term is `pi*r^2*(plate_t - pocket_h)` and not `pi*r^2*plate_t`. And a side-edge
+  blend sat exactly where the pockets are cut, so the kit plate keeps only the lip's top-edge blend.
+  Both were caught by the volume not matching, not by looking at the model.
+- **The fastener constants are deliberately not spec'd.** They form a system, and letting a spec change
+  one silently breaks the joint - so the validation rules enforce the joint, not just the piece.
+
 ---
 
 ## Verified vs unverified
@@ -212,6 +246,12 @@ values exactly (87562.939 / 11 faces and 87013.558 / 15 faces); the test suite; 
 shape; sibling imports; exit-code behaviour; conflict rejection for five classes with no files
 produced; and, for `nx-gui`, that ribbon clicks open the intended dialog, that dialogs are fully
 readable/writable, that graphics face picks work, and that a sketch can be created end to end.
+
+**Verified for the stand and the knock-down kit:** the inclined stand (three XZ profiles along Y,
+united face to face) at 790296.093 mm^3 / 22 faces / 6 cylinders, delta 0.0000; the kit's plate
+644384.609 / 22 faces, rib 120883.479 / 11, screw 524.829 / 12, each delta 0.0000; the assembled kit
+and its exploded twin placed by coordinate - `verify_kit` VERDICT OK on both, with the seven components
+(1 plate + 2 ribs + 4 screws) counted in the saved files.
 
 **Verified for `composed`, against hand-computed numbers:** a 200x160x20 plate, a blend on the four
 corner edges found by selector (removed 2472.213, hand value 2472.213), a D16 cross hole along Y

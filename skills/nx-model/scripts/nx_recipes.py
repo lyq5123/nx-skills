@@ -1066,3 +1066,452 @@ register(CRADLE,
 # module; that mistake was made once already.
 # -----------------------------------------------------------------------------
 import nx_compose          # noqa: F401  (imported for its registration side effect)
+
+
+# -----------------------------------------------------------------------------
+# recipe: laptop_stand
+#
+# An inclined laptop stand: a top plate lying at `angle` degrees, a stop lip
+# across its front (low) edge, and two side ribs that carry the plate. Every
+# profile lives in the XZ plane and is extruded along +Y, so the part is one
+# solid after three face-to-face unions (rib tops touch the plate underside,
+# the lip base touches the plate top - zero overlap, so no overlap term below).
+#
+# Coordinates: the origin is at the front of a rib on the ground; X runs
+# front-to-back, Z is up. The incline line starts at A = (0, front_h) and
+# climbs at `angle`; the plate is the band of thickness plate_t normal to that
+# line, run/cos(angle) long along it. The lip is a lip_len x lip_h band
+# standing normal to the plate at its front edge.
+#
+#     V = (run/cos) * plate_t * width                       the plate
+#       + 2 * rib_t * run * (2*front_h + run*tan) / 2       the two rib trapezoids
+#       + lip_len * lip_h * width                           the stop lip
+#
+# Face count, for the same reason it is exact here:
+#     2   rib bottoms on the ground (z=0, two disjoint strips)
+#     1   the whole incline plane at v=0 (plate underside + both rib tops,
+#         coplanar, merged by the unions)
+#     1   plate top (the lip covers its front strip)
+#     1   lip top
+#     1   merged front face (plate and lip both end normal to the incline)
+#     1   lip back face (normal to the plate at lip_len)
+#     1   plate rear end (normal to the incline)
+#     2   merged outer sides (rib + plate + lip end sections at y=0 and y=width)
+#     2   rib inner sides (y=rib_t and y=width-rib_t)
+#     2   rib front faces (vertical, at x=0)
+#     2   rib rear faces (vertical, at x=run)
+#    16   + 2 per optional feature group, as itemised in metrics()
+#
+# Optional features (all default to 0 = off, so pre-existing specs still build
+# the bare stand):
+#     rib_hole_d   one lightening/handle hole through EACH rib, centred mid-run
+#                  and midway between the ground and the incline at that x
+#     cable_hole_d a hole normal to the plate at u = 0.8 * incline, mid-width,
+#                  for a charging cable to pass through behind the laptop
+#     blend_r      R on the lip's top edge and on both plate-top side edges
+# -----------------------------------------------------------------------------
+STAND = "laptop_stand"
+STAND_PARAM_KEYS = ("width", "run", "angle", "plate_t", "rib_t",
+                    "front_h", "lip_len", "lip_h",
+                    "rib_hole_d", "cable_hole_d", "blend_r")
+STAND_OPTIONAL_KEYS = ("rib_hole_d", "cable_hole_d", "blend_r")
+
+
+def _stand_clearances(params):
+    """Rib-hole centre (x, z) and its (ground, incline) clearances.
+
+    Mid-run, midway between the ground and the incline height at that x, which
+    maximises the smaller of the two margins.
+    """
+    rn, fh = params["run"], params["front_h"]
+    ta = math.tan(math.radians(params["angle"]))
+    hz = fh / 2.0 + rn * ta / 4.0
+    ground = hz
+    incline = (rn / 2.0 * ta + fh - hz) / math.hypot(ta, 1.0)
+    return rn / 2.0, hz, ground, incline
+
+
+def laptop_stand_validate(params):
+    bad = []
+    for k in STAND_PARAM_KEYS[:8]:
+        v = params.get(k)
+        if v is None:
+            bad.append("missing parameter '%s'" % k)
+        elif not isinstance(v, (int, float)) or isinstance(v, bool):
+            bad.append("parameter '%s' must be a number, got %r" % (k, v))
+    for k in STAND_OPTIONAL_KEYS:
+        v = params.get(k)
+        if v is not None and (not isinstance(v, (int, float)) or isinstance(v, bool)):
+            bad.append("parameter '%s' must be a number, got %r" % (k, v))
+    if bad:
+        return bad
+
+    w, rn = params["width"], params["run"]
+    ang, pt, rt = params["angle"], params["plate_t"], params["rib_t"]
+    fh, ll, lh = params["front_h"], params["lip_len"], params["lip_h"]
+    rd = params.get("rib_hole_d") or 0.0
+    cd = params.get("cable_hole_d") or 0.0
+    br = params.get("blend_r") or 0.0
+
+    if min(w, rn, pt, rt, fh, ll, lh) <= 0:
+        bad.append("width/run/plate_t/rib_t/front_h/lip_len/lip_h must be > 0 "
+                   "(got %s/%s/%s/%s/%s/%s/%s)" % (w, rn, pt, rt, fh, ll, lh))
+    if not 0 < ang < 60:
+        bad.append("angle=%.3f must be between 0 and 60 degrees - outside that the "
+                   "shape is not a usable stand" % ang)
+    if rd < 0 or cd < 0 or br < 0:
+        bad.append("rib_hole_d/cable_hole_d/blend_r must be >= 0 (got %s/%s/%s)"
+                   % (rd, cd, br))
+    if bad:
+        return bad
+
+    if 2.0 * rt >= w:
+        bad.append("rib_t=%.3f is too thick for width=%.3f - the two ribs would "
+                   "overlap (need 2*rib_t < width)" % (rt, w))
+    incline = rn / math.cos(math.radians(ang))
+    if ll >= incline:
+        bad.append("lip_len=%.3f is longer than the incline itself (%.3f mm)"
+                   % (ll, incline))
+    if rd > 0:
+        if rd >= rn / 2.0:
+            bad.append("rib_hole_d=%.3f does not fit along run=%.3f - the hole "
+                       "would break out of the rib front or back" % (rd, rn))
+        else:
+            _hx, _hz, ground, to_incline = _stand_clearances(params)
+            if ground - rd / 2.0 < 3.0 or to_incline - rd / 2.0 < 2.0:
+                bad.append("rib_hole_d=%.3f leaves less than 3 mm to the ground or "
+                           "2 mm to the incline (clearances %.3f / %.3f at the hole "
+                           "centre)" % (rd, ground, to_incline))
+    if cd > 0:
+        uc = 0.8 * incline
+        yc = w / 2.0
+        if (uc - cd / 2.0 < ll + 1.0 or uc + cd / 2.0 > incline - 1.0
+                or yc - cd / 2.0 < rt + 2.0 or yc + cd / 2.0 > w - rt - 2.0):
+            bad.append("cable_hole_d=%.3f does not fit the plate with 1 mm to the "
+                       "lip/rear end and 2 mm to the ribs (hole spans u %.3f..%.3f "
+                       "of %.3f, y %.3f..%.3f of %.3f)"
+                       % (cd, uc - cd / 2.0, uc + cd / 2.0, incline,
+                          yc - cd / 2.0, yc + cd / 2.0, w))
+    if br > 0 and br >= min(pt, ll, lh):
+        bad.append("blend_r=%.3f is too large for plate_t=%.3f / lip_len=%.3f / "
+                   "lip_h=%.3f (must be smaller than all three)" % (br, pt, ll, lh))
+    return bad
+
+
+def laptop_stand_metrics(params):
+    w, rn = params["width"], params["run"]
+    a = math.radians(params["angle"])
+    pt, rt, fh = params["plate_t"], params["rib_t"], params["front_h"]
+    ll, lh = params["lip_len"], params["lip_h"]
+    rd = params.get("rib_hole_d") or 0.0
+    cd = params.get("cable_hole_d") or 0.0
+    br = params.get("blend_r") or 0.0
+
+    incline = rn / math.cos(a)
+    vol = (incline * pt * w
+           + 2.0 * rt * rn * (2.0 * fh + rn * math.tan(a)) / 2.0
+           + ll * lh * w)
+    faces, cyl = 16, 0
+    if rd > 0:                       # one hole through each rib
+        vol -= 2.0 * math.pi * (rd / 2.0) ** 2 * rt
+        faces += 2
+        cyl += 2
+    if cd > 0:                       # normal to the plate, near the rear
+        vol -= math.pi * (cd / 2.0) ** 2 * pt
+        faces += 1
+        cyl += 1
+    if br > 0:                       # lip top edge + both plate top side edges
+        vol -= br * br * (1.0 - math.pi / 4.0) * (2.0 * (incline - ll) + w)
+        faces += 3
+        cyl += 3
+    return vol, faces
+
+
+def laptop_stand_cylindrical_faces(params):
+    rd = params.get("rib_hole_d") or 0.0
+    cd = params.get("cable_hole_d") or 0.0
+    br = params.get("blend_r") or 0.0
+    return (2 if rd > 0 else 0) + (1 if cd > 0 else 0) + (3 if br > 0 else 0)
+
+
+def laptop_stand_rib_hole(params):
+    """Centre (x, z) of the rib lightening hole, in the XZ profile plane."""
+    x, z, _g, _i = _stand_clearances(params)
+    return x, z
+
+
+def laptop_stand_cable_hole(params):
+    """Cable hole as (centre, axis, radius) in part coordinates.
+
+    The centre lies on the plate underside at u = 0.8 * incline, mid-width; the
+    axis is the plate normal, so the hole is drilled square through the panel.
+    """
+    w, rn = params["width"], params["run"]
+    a = math.radians(params["angle"])
+    fh = params["front_h"]
+    ca, sa = math.cos(a), math.sin(a)
+    uc = 0.8 * rn / ca
+    return ((uc * ca, w / 2.0, fh + uc * sa), (-sa, 0.0, ca),
+            params["cable_hole_d"] / 2.0)
+
+
+def laptop_stand_bbox(params):
+    """Analytic (min, max) corners of the finished solid, for placement checks.
+
+    The front-most point is not the plate's front-top corner but the lip's: it
+    stands lip_h above the plate, and both lean forward by sin(angle). With a
+    blend of radius br on the lip's top edge the sharp corner is gone, and the
+    extreme is on the blend cylinder: in (u, v) the blend arc is centred at
+    (br, V-br) with V = plate_t + lip_h, and x(u,v) = u*cos - v*sin is minimal
+    at the arc parameter psi = angle, giving
+        xmin = br*(cos(angle) - 1) - (V - br)*sin(angle).
+    Note the vertex-extreme sampling in the builder cannot see this point (it
+    lies inside the arc face, not on its boundary edges); the builder allows
+    br*(1-cos(angle)) of slack on the bounds for exactly that reason.
+    """
+    w, rn = params["width"], params["run"]
+    a = math.radians(params["angle"])
+    pt, fh = params["plate_t"], params["front_h"]
+    lh = params["lip_h"]
+    br = params.get("blend_r") or 0.0
+    v_top = pt + lh
+    if br > 0:
+        xmin = br * (math.cos(a) - 1.0) - (v_top - br) * math.sin(a)
+    else:
+        xmin = -v_top * math.sin(a)
+    return ((xmin, 0.0, 0.0),
+            (rn, w, fh + rn * math.tan(a) + pt * math.cos(a)))
+
+
+register(STAND,
+         STAND_PARAM_KEYS,
+         laptop_stand_validate,
+         laptop_stand_metrics,
+         laptop_stand_cylindrical_faces,
+         aliases=("stand",))
+
+
+# -----------------------------------------------------------------------------
+# recipe: laptop_stand_kd  (knock-down - the laptop stand as an ASSEMBLY KIT)
+#
+# Same stand as `laptop_stand`, split into pieces that fasten with screws, so it
+# can be taken apart. `piece` selects which piece this spec describes; each
+# piece is its own .prt, and build_laptop_stand_kit.py assembles them.
+#
+#   plate  the top plate + stop lip, with a D9x3 pocket for each screw head in
+#          its TOP face (heads sit flush, the laptop slides over them) and a
+#          D5.5 clearance hole through, at u = screw_u1 / screw_u2, y = rib_t/2+0.5
+#   rib    one side rib (modelled centred on y=0, placed twice), with the
+#          lightening hole and a D5.5 x 10 threaded pilot modelled as a plain
+#          hole, cut normal to the incline from the rib's top face
+#   screw  one M5 pan-head screw (head D8.5 x 3, hex socket AF4 x 2.75, shank
+#          D5 x 20 under the head), modelled head-top at the origin, shank
+#          along -Z; the assembly rotates it onto the plate normal
+#
+# Fastener constants are fixed here rather than spec'd: they are a system (the
+# stack plate_t + tap depth must fit under the head with >= 1 mm spare), and
+# letting a spec change one of them silently breaks the joint. The validate
+# rules below enforce the joint, not just the piece.
+#
+# Volumes:
+#   plate = R*plate_t*W + lip_len*lip_h*W
+#           - cable hole - blends - 4 pockets - 4 clearance holes
+#   rib   = trapezoid*rib_t - lightening hole - 2 taps
+#   screw = head cyl - hex socket + shank
+# Face counts are exact the same way the bare stand's 16 were: the pieces are
+# prism-like, the pockets/holes are fully internal, and every union is
+# face-to-face. Conical faces do not exist here (no countersinks - pockets
+# instead), so cylindrical counts cover every curved face.
+# -----------------------------------------------------------------------------
+KD = "laptop_stand_kd"
+KD_PARAM_KEYS = ("piece", "width", "run", "angle", "plate_t", "rib_t",
+                 "front_h", "lip_len", "lip_h",
+                 "rib_hole_d", "cable_hole_d", "blend_r", "screw_u1", "screw_u2")
+KD_PIECES = ("plate", "rib", "screw")
+
+KD_SCREW_D = 5.0            # shank diameter
+KD_SCREW_LEN = 20.0         # under the head
+KD_HEAD_D = 8.5
+KD_HEAD_H = 3.0
+KD_SOCKET_AF = 4.0          # hex socket, across flats
+KD_SOCKET_DEP = 2.75
+KD_CB_D = 9.0               # head pocket in the plate top
+KD_CB_H = 3.0
+KD_CLEAR = 0.5              # clearance hole = screw_d + this
+KD_TAP_DEPTH = 10.0         # modelled depth of the rib's threaded pilot
+
+
+def _kd_hole_dia():
+    return KD_SCREW_D + KD_CLEAR
+
+
+def _kd_screw_y(params):
+    """Screw centre across the width: mid-rib, nudged 0.5 mm rearward so the
+    D9 pocket still lands inside the plate at both edges of the width."""
+    return params["rib_t"] / 2.0 + 0.5
+
+
+def laptop_stand_kd_validate(params):
+    piece = params.get("piece")
+    if piece not in KD_PIECES:
+        return ["piece must be one of %s, got %r" % (", ".join(KD_PIECES), piece)]
+
+    bad = []
+    for k in KD_PARAM_KEYS[1:]:
+        v = params.get(k)
+        if v is None:
+            bad.append("missing parameter '%s'" % k)
+        elif not isinstance(v, (int, float)) or isinstance(v, bool):
+            bad.append("parameter '%s' must be a number, got %r" % (k, v))
+    if bad:
+        return bad
+
+    w, rn = params["width"], params["run"]
+    ang, pt, rt = params["angle"], params["plate_t"], params["rib_t"]
+    fh, ll, lh = params["front_h"], params["lip_len"], params["lip_h"]
+    rd, cd, br = params["rib_hole_d"], params["cable_hole_d"], params["blend_r"]
+    u1, u2 = params["screw_u1"], params["screw_u2"]
+
+    if min(w, rn, pt, rt, fh, ll, lh) <= 0:
+        bad.append("width/run/plate_t/rib_t/front_h/lip_len/lip_h must be > 0")
+    if not 0 < ang < 60:
+        bad.append("angle=%.3f must be between 0 and 60 degrees" % ang)
+    if min(rd, cd, br) < 0:
+        bad.append("rib_hole_d/cable_hole_d/blend_r must be >= 0")
+    if bad:
+        return bad
+    if 2.0 * rt >= w:
+        bad.append("rib_t=%.3f is too thick for width=%.3f - the two ribs would "
+                   "overlap" % (rt, w))
+        return bad
+
+    incline = rn / math.cos(math.radians(ang))
+    if ll >= incline:
+        bad.append("lip_len=%.3f is longer than the incline itself (%.3f mm)"
+                   % (ll, incline))
+
+    # the joint: pocket must sit on the plate, the tap inside the rib, and the
+    # screw must clamp with spare travel
+    y = _kd_screw_y(params)
+    if y - KD_CB_D / 2.0 < 0.0 or y + KD_CB_D / 2.0 > w:
+        bad.append("the D%.1f head pocket at y=%.3f breaks out of the plate "
+                   "width %.3f" % (KD_CB_D, y, w))
+    if y - _kd_hole_dia() / 2.0 < 0.0 or y + _kd_hole_dia() / 2.0 > rt:
+        bad.append("the D%.1f tap at y=%.3f breaks out of the %.3f thick rib"
+                   % (_kd_hole_dia(), y, rt))
+    if pt + KD_TAP_DEPTH > KD_SCREW_LEN - 1.0:
+        bad.append("the screw cannot clamp: plate %.3f + tap depth %.1f = %.3f "
+                   "needs under-head length > %.1f, but the screw is %.1f"
+                   % (pt, KD_TAP_DEPTH, pt + KD_TAP_DEPTH,
+                      KD_SCREW_LEN - 1.0, KD_SCREW_LEN))
+    for tag, u in (("screw_u1", u1), ("screw_u2", u2)):
+        if u - KD_CB_D / 2.0 < ll + 2.0:
+            bad.append("%s=%.3f: its pocket breaks into the lip (pocket starts "
+                       "at u=%.3f, lip ends at %.3f)" % (tag, u, u - KD_CB_D / 2.0, ll))
+        if u + KD_CB_D / 2.0 > incline - 2.0:
+            bad.append("%s=%.3f: its pocket runs past the rear edge (u ends at "
+                       "%.3f, incline is %.3f)" % (tag, u, u + KD_CB_D / 2.0, incline))
+    if not bad and u2 - u1 < KD_CB_D + 2.0:
+        bad.append("screw_u1=%.3f and screw_u2=%.3f: the two pockets would "
+                   "overlap" % (u1, u2))
+    if rd > 0 and not bad:
+        # tap vs lightening hole, compared in x (conservative: the tap's real
+        # x-extent is smaller by cos(angle))
+        tap_x = sorted(u * math.cos(math.radians(ang)) + s * _kd_hole_dia() / 2.0
+                       for u in (u1, u2) for s in (-1.0, 1.0))
+        lite = (rn / 2.0 - rd / 2.0, rn / 2.0 + rd / 2.0)
+        if tap_x[1] > lite[0] and tap_x[0] < lite[1]:
+            bad.append("a screw tap (x %.3f..%.3f) overlaps the lightening hole "
+                       "(x %.3f..%.3f) - move screw_u1/screw_u2 or shrink "
+                       "rib_hole_d" % (tap_x[0], tap_x[1], lite[0], lite[1]))
+    if cd > 0 and not bad:
+        # tap pocket vs cable hole: both u and y must overlap to conflict
+        uc = 0.8 * incline
+        yc = w / 2.0
+        u_ov = any(min(u + KD_CB_D / 2.0, uc + cd / 2.0)
+                   > max(u - KD_CB_D / 2.0, uc - cd / 2.0) for u in (u1, u2))
+        y_ov = abs(yc - y) < cd / 2.0 + KD_CB_D / 2.0
+        if u_ov and y_ov:
+            bad.append("a screw pocket overlaps the cable hole region - move "
+                       "screw_u2 or shrink cable_hole_d")
+    return bad
+
+
+def laptop_stand_kd_metrics(params):
+    piece = params["piece"]
+    w, rn = params["width"], params["run"]
+    a = math.radians(params["angle"])
+    pt, rt, fh = params["plate_t"], params["rib_t"], params["front_h"]
+    ll, lh = params["lip_len"], params["lip_h"]
+    rd, cd, br = params["rib_hole_d"], params["cable_hole_d"], params["blend_r"]
+
+    incline = rn / math.cos(a)
+    if piece == "plate":
+        vol = (incline * pt * w + ll * lh * w)
+        if cd > 0:
+            vol -= math.pi * (cd / 2.0) ** 2 * pt
+        if br > 0:
+            # lip's top edge only: the plate-top side blends would sit exactly
+            # where the head pockets are cut, and two overlapping removes make
+            # the analytic volume a mess for no ergonomic gain
+            vol -= br * br * (1.0 - math.pi / 4.0) * w
+        vol -= 4.0 * math.pi * (KD_CB_D / 2.0) ** 2 * KD_CB_H
+        # the clearance hole only removes material BELOW each pocket
+        vol -= 4.0 * math.pi * (_kd_hole_dia() / 2.0) ** 2 * (pt - KD_CB_H)
+        return vol, 22
+    if piece == "rib":
+        vol = rn * (2.0 * fh + rn * math.tan(a)) / 2.0 * rt
+        if rd > 0:
+            vol -= math.pi * (rd / 2.0) ** 2 * rt
+        vol -= 2.0 * math.pi * (_kd_hole_dia() / 2.0) ** 2 * KD_TAP_DEPTH
+        return vol, 11
+    # screw
+    head = math.pi * (KD_HEAD_D / 2.0) ** 2 * KD_HEAD_H
+    socket = (math.sqrt(3.0) / 2.0) * KD_SOCKET_AF ** 2 * KD_SOCKET_DEP
+    shank = math.pi * (KD_SCREW_D / 2.0) ** 2 * KD_SCREW_LEN
+    return head - socket + shank, 12
+
+
+def laptop_stand_kd_cylindrical_faces(params):
+    piece = params["piece"]
+    cd = params["cable_hole_d"]
+    rd = params["rib_hole_d"]
+    if piece == "plate":
+        return (1 if cd > 0 else 0) + (1 if params["blend_r"] > 0 else 0) + 8
+    if piece == "rib":
+        return (1 if rd > 0 else 0) + 2
+    return 2                        # head + shank
+
+
+def laptop_stand_kd_screw_origins(params):
+    """World head-top centres of the four screws (head flush with plate top).
+
+    (u*cos - plate_t*sin, y, front_h + u*sin + plate_t*cos), y = mid-rib + 0.5.
+    """
+    w = params["width"]
+    a = math.radians(params["angle"])
+    pt, fh, rt = params["plate_t"], params["front_h"], params["rib_t"]
+    ca, sa = math.cos(a), math.sin(a)
+    y = rt / 2.0 + 0.5
+    out = []
+    for u in (params["screw_u1"], params["screw_u2"]):
+        for yy in (y, w - y):
+            out.append((u * ca - pt * sa, yy, fh + u * sa + pt * ca))
+    return out
+
+
+def laptop_stand_kd_screw_matrix(params):
+    """Orientation rows mapping the screw's local axes onto the joint: local +Z
+    onto the plate normal, local +X along the incline, +Y across the width.
+    The shank (local -Z) then points into the material."""
+    a = math.radians(params["angle"])
+    ca, sa = math.cos(a), math.sin(a)
+    return (ca, 0.0, -sa, 0.0, 1.0, 0.0, sa, 0.0, ca)
+
+
+register(KD,
+         KD_PARAM_KEYS,
+         laptop_stand_kd_validate,
+         laptop_stand_kd_metrics,
+         laptop_stand_kd_cylindrical_faces,
+         aliases=("kd", "stand_kd"))

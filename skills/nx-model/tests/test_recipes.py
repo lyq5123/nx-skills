@@ -663,11 +663,206 @@ class ComposedRecipeTests(unittest.TestCase):
             self.assertGreaterEqual(hi[i], max(offsets))
 
 
+class LaptopStandRecipeTests(unittest.TestCase):
+    """W280 / run250 / 18 deg / plate 8 / rib 6 / front 12 / lip 15x15, with the
+    optimisation features on: rib holes D36, cable hole D30, blends R3.
+
+    Computed independently of the recipe, from the geometry:
+        incline = 250/cos(18)                                 = 262.86555605955923
+        base    = incline*8*280 + 2*6*250*(24+250*tan18)/2
+                  + 15*15*280                                 = 809663.7316607526
+        rib holes  2*pi*18^2*6                             =  12214.5122
+        cable hole pi*15^2*8                               =   5654.8668
+        blends    3^2*(1-pi/4)*(2*(incline-15)+280)        =   1498.2599
+        total                                              = 790296.0927548
+    Faces: the bare stand's 16, + 2 rib-hole cylinders, + 1 cable-hole cylinder,
+    + 3 blend cylinders (lip top edge and the two plate-top side edges) = 22.
+    """
+
+    STAND = dict(width=280.0, run=250.0, angle=18.0, plate_t=8.0, rib_t=6.0,
+                 front_h=12.0, lip_len=15.0, lip_h=15.0,
+                 rib_hole_d=36.0, cable_hole_d=30.0, blend_r=3.0)
+
+    def test_metrics_match_the_independently_computed_values(self):
+        spec = {"part": "laptop_stand", "params": self.STAND}
+        vol, faces = nxc.part_metrics(spec)
+        self.assertAlmostEqual(vol, 790296.0927548, places=6)
+        self.assertEqual(faces, 22)
+        self.assertEqual(nxc.cylindrical_faces(spec), 6)
+
+    def test_optional_features_off_reproduces_the_bare_stand(self):
+        spec = {"part": "laptop_stand",
+                "params": dict(self.STAND, rib_hole_d=0.0, cable_hole_d=0.0,
+                               blend_r=0.0)}
+        vol, faces = nxc.part_metrics(spec)
+        self.assertAlmostEqual(vol, 809663.7316607526, places=3)
+        self.assertEqual(faces, 16)
+        self.assertEqual(nxc.cylindrical_faces(spec), 0)
+
+    def test_missing_optional_keys_still_validates(self):
+        # specs written before the optional features existed must keep working
+        bare = dict(self.STAND)
+        for k in ("rib_hole_d", "cable_hole_d", "blend_r"):
+            del bare[k]
+        self.assertEqual(nxc.validate_part({"part": "laptop_stand",
+                                            "params": bare}), [])
+        vol, faces = nxc.part_metrics({"part": "laptop_stand", "params": bare})
+        self.assertAlmostEqual(vol, 809663.7316607526, places=3)
+        self.assertEqual(faces, 16)
+
+    def test_fixture_matches_independently_computed_values(self):
+        spec = spec_from_fixture("laptop_stand.json")
+        vol, faces = nxc.part_metrics(spec)
+        self.assertAlmostEqual(vol, 790296.0927548, places=6)
+        self.assertEqual(faces, 22)
+
+    def test_valid_stand_passes(self):
+        self.assertEqual(nxc.validate_part({"part": "laptop_stand",
+                                            "params": self.STAND}), [])
+
+    def test_stand_conflicts_are_rejected(self):
+        cases = [
+            (dict(self.STAND, rib_t=150.0), "rib"),
+            (dict(self.STAND, angle=75.0), "angle"),
+            (dict(self.STAND, lip_len=300.0), "lip_len"),
+            (dict(self.STAND, width=0.0), "must be > 0"),
+            (dict(self.STAND, rib_hole_d=100.0), "rib_hole_d"),
+            (dict(self.STAND, cable_hole_d=270.0), "cable_hole_d"),
+            (dict(self.STAND, blend_r=10.0), "blend_r"),
+        ]
+        for params, needle in cases:
+            problems = nxc.validate_part({"part": "laptop_stand", "params": params})
+            self.assertTrue(any(needle in p for p in problems),
+                            "%s not caught: %r" % (needle, problems))
+
+    def test_bbox_matches_the_independently_computed_corners(self):
+        # with the R3 blend on the lip's top edge the sharp corner is gone; the
+        # extreme lies on the blend cylinder at arc parameter psi = angle:
+        # xmin = 3*(cos18-1) - (8+15-3)*sin18 = -0.146830 - 6.180340 = -6.327170
+        mn, mx = nxr.laptop_stand_bbox(self.STAND)
+        self.assertAlmostEqual(mn[0], -6.327170338613479, places=6)
+        self.assertAlmostEqual(mx[0], 250.0, places=6)
+        self.assertAlmostEqual(mx[1], 280.0, places=6)
+        # 12 + 250*tan(18) + 8*cos(18) = 12 + 81.229924 + 7.608452
+        self.assertAlmostEqual(mx[2], 100.83837618858781, places=6)
+
+    def test_bbox_unblended_front_corner(self):
+        # without the blend the lip's sharp front-top corner leads:
+        # xmin = -(8+15)*sin(18) = -7.107391
+        mn, _mx = nxr.laptop_stand_bbox(
+            dict(self.STAND, blend_r=0.0))
+        self.assertAlmostEqual(mn[0], -7.107390870623791, places=6)
+
+
+class LaptopStandKdTests(unittest.TestCase):
+    """The knock-down kit: same stand, split into plate / rib / screw pieces.
+
+    Computed independently of the recipe (M5 pan head, D9x3 pockets, D5.5
+    clearance holes cut only BELOW each pocket, 10 mm pilots, rib_t=10; the
+    plate keeps only the lip's top-edge blend - the side blends would sit
+    exactly where the pockets are cut):
+        plate = incline*8*280 + 15*15*280 - cable(D30) - R3*280
+                - 4*pi*4.5^2*3 - 4*pi*2.75^2*5           = 644384.6092651
+        rib   = 250*(24+250*tan18)/2*10 - pi*18^2*10
+                - 2*pi*2.75^2*10                         = 120883.4789863
+        screw = pi*4.25^2*3 - (sqrt(3)/2)*4^2*2.75
+                + pi*2.5^2*20                            =    524.8290158
+    Faces: plate 22, rib 11, screw 12; cylindrical 10 / 3 / 2
+    (plate: cable + lip blend + 4 pockets + 4 clearance holes).
+    """
+
+    KD = dict(piece="plate", width=280.0, run=250.0, angle=18.0, plate_t=8.0,
+              rib_t=10.0, front_h=12.0, lip_len=15.0, lip_h=15.0,
+              rib_hole_d=36.0, cable_hole_d=30.0, blend_r=3.0,
+              screw_u1=60.0, screw_u2=200.0)
+
+    def test_plate_metrics(self):
+        spec = {"part": "laptop_stand_kd", "params": self.KD}
+        vol, faces = nxc.part_metrics(spec)
+        self.assertAlmostEqual(vol, 644384.6092651, places=6)
+        self.assertEqual(faces, 22)
+        self.assertEqual(nxc.cylindrical_faces(spec), 10)
+
+    def test_rib_metrics(self):
+        spec = {"part": "laptop_stand_kd",
+                "params": dict(self.KD, piece="rib")}
+        vol, faces = nxc.part_metrics(spec)
+        self.assertAlmostEqual(vol, 120883.4789863, places=6)
+        self.assertEqual(faces, 11)
+        self.assertEqual(nxc.cylindrical_faces(spec), 3)
+
+    def test_screw_metrics(self):
+        spec = {"part": "laptop_stand_kd",
+                "params": dict(self.KD, piece="screw")}
+        vol, faces = nxc.part_metrics(spec)
+        self.assertAlmostEqual(vol, 524.8290158, places=6)
+        self.assertEqual(faces, 12)
+        self.assertEqual(nxc.cylindrical_faces(spec), 2)
+
+    def test_fixture_matches(self):
+        spec = spec_from_fixture("laptop_stand_kd.json")
+        vol, faces = nxc.part_metrics(spec)
+        self.assertAlmostEqual(vol, 644384.6092651, places=6)
+        self.assertEqual(faces, 22)
+
+    def test_kit_volume_is_the_sum_of_the_pieces(self):
+        # 1 plate + 2 ribs + 4 screws, computed here from the piece volumes
+        pv, _ = nxc.part_metrics({"part": "laptop_stand_kd", "params": self.KD})
+        rv, _ = nxc.part_metrics({"part": "laptop_stand_kd",
+                                  "params": dict(self.KD, piece="rib")})
+        sv, _ = nxc.part_metrics({"part": "laptop_stand_kd",
+                                  "params": dict(self.KD, piece="screw")})
+        self.assertAlmostEqual(pv + 2 * rv + 4 * sv, 888250.8833010, places=5)
+
+    def test_valid_pieces_pass(self):
+        for piece in ("plate", "rib", "screw"):
+            spec = {"part": "laptop_stand_kd",
+                    "params": dict(self.KD, piece=piece)}
+            self.assertEqual(nxc.validate_part(spec), [], piece)
+
+    def test_kd_conflicts_are_rejected(self):
+        cases = [
+            (dict(self.KD, piece="washer"), "piece must be one of"),
+            (dict(self.KD, screw_u1=10.0), "breaks into the lip"),
+            (dict(self.KD, screw_u2=61.0), "overlap"),
+            # width 70 / rib_t 32 puts the screw pocket at y=16.5, inside the
+            # cable hole's y band (35 +/- 19.5), with u2's pocket inside the
+            # cable hole's u band - the only way to reach that conflict legally
+            (dict(self.KD, width=70.0, rib_t=32.0), "cable hole region"),
+            # rib_t=7 puts the pocket centre at y=4, so the D9 pocket breaks the
+            # plate edge before the (redundant, tighter) tap-width guard can
+            (dict(self.KD, rib_t=7.0), "breaks out of the plate width"),
+        ]
+        for params, needle in cases:
+            problems = nxc.validate_part({"part": "laptop_stand_kd",
+                                          "params": params})
+            self.assertTrue(any(needle in p for p in problems),
+                            "%s not caught: %r" % (needle, problems))
+
+    def test_screw_origins_and_matrix(self):
+        origins = nxr.laptop_stand_kd_screw_origins(self.KD)
+        self.assertEqual(len(origins), 4)
+        # head top is flush with the plate top: z = front_h + u*sin + plate_t*cos
+        self.assertAlmostEqual(origins[0][0], 60 * math.cos(math.radians(18))
+                               - 8 * math.sin(math.radians(18)), places=6)
+        self.assertAlmostEqual(origins[0][2], 12 + 60 * math.sin(math.radians(18))
+                               + 8 * math.cos(math.radians(18)), places=6)
+        # mirrored across the width, same u pair
+        self.assertAlmostEqual(origins[1][1], 280.0 - origins[0][1], places=6)
+        rows = nxr.laptop_stand_kd_screw_matrix(self.KD)
+        # column 3 of the orientation (Xz, Yz, Zz) maps local +Z onto the
+        # plate normal (-sin, 0, cos); Zx is column 1's z, along the incline
+        self.assertAlmostEqual(rows[2], -math.sin(math.radians(18)), places=6)
+        self.assertAlmostEqual(rows[8], math.cos(math.radians(18)), places=6)
+        self.assertAlmostEqual(rows[6], math.sin(math.radians(18)), places=6)
+
+
 class RegistryCoverageTests(unittest.TestCase):
     def test_all_shapes_are_registered(self):
         self.assertEqual(nxr.known_parts(),
                          ["circular_flange", "composed", "extruded_profile",
-                          "l_bracket", "mounting_plate", "shaft_cradle"])
+                          "l_bracket", "laptop_stand", "laptop_stand_kd",
+                          "mounting_plate", "shaft_cradle"])
 
     def test_every_recipe_exposes_params_and_rules(self):
         for name in nxr.known_parts():

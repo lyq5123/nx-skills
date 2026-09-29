@@ -30,7 +30,7 @@ selector; pass the full id when you want exactly one.
 | T6 | A missing spec path and a malformed JSON spec both fail with a clear message rather than a traceback. |
 | T7 | The exported STEP contains a `MANIFOLD_SOLID_BREP`, not just a plausible file. |
 | T8 | The pure-logic unit tests, with no NX involved: `test_recipes.py` (recipes, validation, analytic formulas) and `test_output_contract.py` (what a run leaves on disk and what it exits with). |
-| T9 | **Every registered shape** - flange, bracket, the generic profile, the arc outline and the shaft cradle - builds a correct solid and passes the independent verifier. |
+| T9 | **Every registered shape** - flange, bracket, the generic profile, the arc outline, the shaft cradle, the inclined laptop stand and all three knock-down pieces (plate, rib, screw) - builds a correct solid and passes the independent verifier. |
 | T10 | The **composed** recipe: a five-operation feature list builds in order, the geometric edge selectors match the expected number of edges, the material each blend/chamfer removed is checked against hand arithmetic, and the cylindrical-face count confirms every round and hole applied. Also carries the negative control for the sampled reference: verifying the built part against a spec claiming a **larger** cross hole must fail. |
 
 ## Layout
@@ -48,6 +48,8 @@ tests/
     cradle_ok.json           valid shaft cradle (multi-feature)
     outline_arcs_ok.json     valid outline containing circular arcs
     composed_cover.json      valid composed feature list (plate, hole, boss, rounds, chamfer)
+    laptop_stand.json        valid inclined stand, with the optional holes and blends on
+    laptop_stand_kd.json     valid knock-down piece; T9 builds all three via `piece`
     bad_hole_outside.json    hole breaks through the plate edge
     bad_hole_centreline.json holes at the centreline -> the four coincide
     bad_bore_overlap.json    bore overlaps the corner holes
@@ -57,7 +59,8 @@ tests/
   tmp/                     specs materialised with test-local out_dir
 ```
 
-Six of the twelve fixtures are expected to be **rejected** (`bad_*`); the rest must build.
+Five of the fourteen fixtures are expected to be **rejected** (`bad_*`); the rest must build.
+`laptop_stand_kd.json` is built three times over, once per `piece`.
 
 ## Keeping a stale artefact from being read as this run's result
 

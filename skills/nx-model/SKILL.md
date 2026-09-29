@@ -176,8 +176,10 @@ Read this before transcribing, because it decides whether the job is even possib
 | `circular_flange` (`flange`) | disc, centre bore, bolt circle, rim chamfers | `od` `id` `thk` `bcd` `n_bolts` `bolt_d` `chamfer` |
 | `l_bracket` (`bracket`) | L profile extruded, two through-holes | `base_l` `base_t` `wall_t` `total_h` `width` `hole_d` `hole_inset_x` |
 | `shaft_cradle` (`cradle`) | base plate + upper block with a semicircular groove, ears with cross-holes, rounded upper corners | 16 params - see `nx_recipes.py`; **read the caveat below** |
+| `laptop_stand` (`stand`) | inclined top plate + front stop lip + two side ribs, with optional rib lightening holes, a cable hole and blends | `width` `run` `angle` `plate_t` `rib_t` `front_h` `lip_len` `lip_h` (`rib_hole_d` `cable_hole_d` `blend_r` optional, 0 = off) |
+| `laptop_stand_kd` | **the same stand as a knock-down kit** - separate pieces that screw together: `piece` = `plate` / `rib` / `screw` | `piece` + the stand's params + `screw_u1` `screw_u2` |
 
-`shaft_cradle` is the one **multi-feature** recipe: it is not a single extrusion, and it exists as a
+`shaft_cradle` is a **multi-feature** recipe: it is not a single extrusion, and it exists as a
 worked example of the pattern (extrude a base, unite a block, cut a groove along Y, blend edges on
 planes other than Z, drill along two axes). Its DEFAULT PARAMETERS come from a drawing whose reading is
 **provisional** - the source drawing is internally inconsistent under the reading used, and the
@@ -185,6 +187,32 @@ uncertain values are exposed as parameters (`top_setback`, `base_hole_*`, `ear_h
 `saddle_w` relates to `2*saddle_r`). Its *geometry and volume formula* are verified (delta 0.0000
 against the kernel); its *defaults* are not confirmed against the drawing. Treat it as a template, not
 as "exercise 16 answered".
+
+`laptop_stand` is the second multi-feature recipe: three XZ profiles (plate, lip, two
+ribs) extruded along Y and united face to face, with an exact volume and face count -
+verified 280/250/18°/8/6/12/15/15 + optional holes and R3 blends → 790296.093 mm³, 22 faces.
+
+`laptop_stand_kd` is the same stand **split so it can be taken apart**, and it is the only part
+type here whose spec describes **one piece of an assembly** rather than a whole part:
+
+| `piece` | what it is | verified |
+| --- | --- | --- |
+| `plate` | top plate + stop lip, with a D9x3 head pocket in the TOP face (heads sit flush so the laptop slides over them) and a D5.5 clearance hole, at `u = screw_u1`/`screw_u2` | 644384.609 mm³, 22 faces |
+| `rib` | one side rib (modelled centred on y=0, placed twice), lightening hole, D5.5x10 threaded pilot cut normal to the incline as a plain hole | 120883.479 mm³, 11 faces |
+| `screw` | one M5 pan-head screw - head D8.5x3, hex socket AF4x2.75, shank D5x20 under the head | 524.829 mm³, 12 faces |
+
+`build_laptop_stand_kit.py` then creates **two assembly files** from the three verified pieces:
+`<kit>.prt` in working position and `<kit>_exploded.prt` with the components displaced along the
+plate normal so the disassembly order is visible. Components are placed by **coordinate** (origin +
+orientation), not by constraint solving - each placement is derived from the same recipe geometry the
+pieces were built to, so the screws land in their holes by construction and stay exact however the
+assembly is manipulated afterwards. An assembly has no volume of its own, so `verify_kit.py` checks
+**component counts and names** in the saved assembly instead, and the pieces are measured by
+`verify_part.py` like any other part.
+
+The fastener constants (M5, head D8.5x3, socket AF4x2.75, pocket D9x3, clearance +0.5) are
+deliberately **not** spec'd: they are a system, and the validate rules enforce the joint rather than
+the piece - the stack `plate_t` + tap depth has to fit under the head with at least 1 mm spare.
 
 **And then the two general ones, which are the usual answer:**
 
@@ -351,8 +379,9 @@ Ten tests cover the no-argument path (backward compatibility), a spec-driven bui
 **independently** computed volume, the verifier agreeing, the verifier *rejecting* a part built to
 other dimensions (the negative control - without it a verifier that always passes looks green), each
 parameter-conflict class, bad invocations, STEP content, the recipe unit tests, **every registered
-shape building and verifying end to end**, and a **five-operation composed part** whose blends,
-selectors and analytic volume are each asserted. Exit code 0 = all passed. Run it after touching any
+shape building and verifying end to end** - which includes the stand and all three knock-down
+pieces - and a **five-operation composed part** whose blends, selectors and analytic volume are each
+asserted. Exit code 0 = all passed. Run it after touching any
 script.
 
 ## Showing the part in the user's open NX session
@@ -427,6 +456,10 @@ logical step.
 | `scripts/build_plate.py` | the plate builder - geometry only; copy it to start a new shape |
 | `scripts/build_flange.py` / `build_bracket.py` | the other two named shapes |
 | `scripts/build_profile.py` | the generic one: any outline of lines and circular arcs, extruded |
+| `scripts/build_laptop_stand.py` | the inclined stand: three XZ profiles extruded along Y, united face to face |
+| `scripts/build_laptop_stand_kd.py` | one piece of the knock-down kit (dispatches on `piece`) |
+| `scripts/build_laptop_stand_kit.py` | **the assembly builder**: three verified pieces → a working-position and an exploded assembly |
+| `scripts/verify_kit.py` | checking a saved assembly's components, since an assembly has no volume to measure |
 | `scripts/nx_compose.py` | the feature-list recipe: operations, planes, edge selectors, and the Monte-Carlo reference volume (plain Python) |
 | `scripts/build_composed.py` | the executor for a feature list - multi-plane extrusions, unites and cuts, blends/chamfers by selector |
 | `scripts/verify_part.py` | measuring a finished part against its spec, whatever shape it is |

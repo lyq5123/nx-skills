@@ -1,0 +1,13 @@
+{
+  "part_name": "laptop_stand_kd_ok",
+  "out_dir": "~/nx_out",
+  "part": "laptop_stand_kd",
+  "params": {
+    "piece": "plate",
+    "width": 280.0, "run": 250.0, "angle": 18.0,
+    "plate_t": 8.0, "rib_t": 10.0, "front_h": 12.0,
+    "lip_len": 15.0, "lip_h": 15.0,
+    "rib_hole_d": 36.0, "cable_hole_d": 30.0, "blend_r": 3.0,
+    "screw_u1": 60.0, "screw_u2": 200.0
+  }
+}
