@@ -74,9 +74,14 @@ def main():
 
     if not os.path.isfile(part):
         print("[FAIL] no such part: %s" % part)
-        print("       build it first, e.g.")
-        print('       "$UGII_BASE_DIR/NXBIN/run_journal.exe" %s'
-              % os.path.join(HERE, "build_plate.py") + " -args " + sys.argv[1])
+        if sys.argv[1].lower().endswith(".prt"):
+            print("       build that part first, or pass the spec it was built from")
+        else:
+            # Which journal depends on the spec's "part", so name no particular one:
+            # suggesting build_plate.py for a flange spec would be wrong.
+            print("       build it first, e.g.")
+            print('       "$UGII_BASE_DIR/NXBIN/run_journal.exe" <build_*.py> -args %s'
+                  % sys.argv[1])
         return 1
 
     how = open_with_os(part)
@@ -86,9 +91,17 @@ def main():
 
     size_kb = os.path.getsize(part) / 1024.0
     print("[ok]   opened %s (%.1f KB) via %s" % (os.path.basename(part), size_kb, how))
-    print("[..]   NX shows the part and its feature tree in the part navigator.")
-    if os.path.isfile(part.replace(".prt", ".step")):
-        print("[..]   STEP alongside it: %s" % os.path.basename(part.replace(".prt", ".step")))
+    # Say only what this line knows. os.startfile hands the path to the file
+    # association and returns immediately - it does not wait for NX, and NX takes
+    # tens of seconds to come up when it was not already running. Claiming the part
+    # is on screen would be the unverified assertion this skill refuses elsewhere.
+    # (That NX does end up showing the part and its feature tree was verified by
+    # observation and is recorded in SKILL.md; it is just not knowable here.)
+    print("[..]   handed to NX; it shows up once the session has loaded it")
+    base, _ext = os.path.splitext(part)
+    step_path = base + ".step"
+    if os.path.isfile(step_path):
+        print("[..]   STEP alongside it: %s" % os.path.basename(step_path))
     return 0
 
 

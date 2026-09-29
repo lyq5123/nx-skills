@@ -13,7 +13,6 @@ import glob
 import json
 import math
 import os
-import shutil
 import subprocess
 import sys
 import time
@@ -99,12 +98,48 @@ def result_of(part_name, verify=False, out_dir=None):
         return json.load(fh)
 
 
+def discard(path):
+    """Remove a file so the next run has to recreate it.
+
+    Returns None when it is gone - the normal case - or the file's mtime when the
+    delete was refused. On a machine where the OS refuses the delete (read-only
+    directory, the file held open, a fail-closed sandbox that cannot use the
+    recycle bin) a bare os.remove raises and the test aborts BEFORE it runs, which
+    reads as a skill failure when nothing is wrong. The caller compares the
+    returned mtime, so "the file is there" cannot be mistaken for "this run wrote
+    it".
+    """
+    if not os.path.exists(path):
+        return None
+    try:
+        os.remove(path)
+        return None
+    except OSError:
+        return os.path.getmtime(path)
+
+
 def reset_result(part_name, verify=False, out_dir=None):
-    """Drop a previous result file so a stale one cannot mask a failure."""
+    """Drop a previous result file so a stale one cannot mask a failure.
+
+    Where the delete is refused, poison the file instead of skipping it: the
+    sentinel carries no "status": "ok", so a run that fails to write still cannot
+    be read as a passing one. Silently leaving the old file alone would defeat the
+    only thing this function is for.
+    """
     suffix = ".verify.result.json" if verify else ".result.json"
     path = os.path.join(out_dir or OUT, part_name + suffix)
-    if os.path.exists(path):
+    if not os.path.exists(path):
+        return
+    try:
         os.remove(path)
+    except OSError as exc:
+        try:
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write('{"status": "stale", "errors": '
+                         '["previous result could not be removed: %s"]}' % exc)
+        except OSError as exc2:
+            # Nothing left to try: say so loudly rather than let a stale "ok" stand.
+            print("[WARN] cannot remove or neuter the stale result %s: %s" % (path, exc2))
 
 
 def check(cond, msg):
@@ -117,10 +152,10 @@ def check(cond, msg):
 # -----------------------------------------------------------------------------
 def T1_build_default():
     """No arguments must still build the original part (backward compatibility)."""
+    obsoleted = {}
     for f in (DEFAULT_NAME + ".prt", DEFAULT_NAME + ".step"):
         p = os.path.join(DEFAULT_OUT, f)
-        if os.path.exists(p):
-            os.remove(p)
+        obsoleted[p] = discard(p)
     reset_result(DEFAULT_NAME, out_dir=DEFAULT_OUT)
     rc, out = run("build_plate.py")
     check(rc == 0, "expected exit 0, got %d\n%s" % (rc, out[-1500:]))
@@ -134,8 +169,13 @@ def T1_build_default():
           "volume %.6f != independently computed %.6f" % (got, DEFAULT_VOLUME))
     check(r["checks"]["faces"]["actual"] == DEFAULT_FACES,
           "faces=%s expected %s" % (r["checks"]["faces"]["actual"], DEFAULT_FACES))
-    check(os.path.isfile(os.path.join(DEFAULT_OUT, DEFAULT_NAME + ".prt")), ".prt missing")
-    check(os.path.isfile(os.path.join(DEFAULT_OUT, DEFAULT_NAME + ".step")), ".step missing")
+    for p, before in obsoleted.items():
+        base = os.path.basename(p)
+        check(os.path.isfile(p), "%s missing" % base)
+        # Where the delete was refused, mere existence proves nothing - the file
+        # may be the previous run's. A newer mtime is what proves this run wrote it.
+        if before is not None:
+            check(os.path.getmtime(p) > before, "%s was not rewritten" % base)
 
 
 def T2_build_from_spec():
@@ -235,17 +275,19 @@ def T7_step_contains_geometry():
 
 
 def T8_recipe_unit_tests():
-    """Pure-logic tests for the part recipes and registry.
+    """Pure-logic tests for the part recipes, the registry and the output contract.
 
     Fast and NX-free, so the rules can be checked without paying ~30 s per
-    journal run. Runs in its own process to keep its imports out of the
+    journal run. Each file runs in its own process to keep its imports out of the
     harness's namespace.
     """
-    p = subprocess.run([sys.executable, os.path.join(HERE, "test_recipes.py")],
-                       capture_output=True, text=True, cwd=HERE)
-    if p.returncode != 0:
-        raise AssertionError("recipe unit tests failed:\n%s"
-                             % ((p.stdout or "") + (p.stderr or ""))[-2500:])
+    for unit_file in ("test_recipes.py", "test_output_contract.py"):
+        p = subprocess.run([sys.executable, os.path.join(HERE, unit_file)],
+                           capture_output=True, text=True, cwd=HERE)
+        if p.returncode != 0:
+            raise AssertionError("%s failed:\n%s"
+                                 % (unit_file,
+                                    ((p.stdout or "") + (p.stderr or ""))[-2500:]))
 
 
 def T9_other_shapes_build_and_verify():
@@ -404,7 +446,8 @@ TESTS = [
     ("T5", "parameter conflicts rejected before NX is touched", T5_bad_specs_rejected),
     ("T6", "missing / malformed spec files and stray options fail clearly", T6_missing_and_malformed_spec),
     ("T7", "exported STEP contains real geometry", T7_step_contains_geometry),
-    ("T8", "part-recipe unit tests (no NX needed)", T8_recipe_unit_tests),
+    ("T8", "unit tests: recipes + the output contract (no NX needed)",
+     T8_recipe_unit_tests),
     ("T9", "every registered shape builds and verifies end to end", T9_other_shapes_build_and_verify),
     ("T10", "a composed feature list builds in order, rounds included",
      T10_composed_features_build_in_order),

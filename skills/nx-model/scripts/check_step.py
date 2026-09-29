@@ -22,8 +22,12 @@ REQUIRED = ((SOLID, 1),)
 
 def check(path):
     try:
-        with open(path, "r", encoding="latin-1", errors="replace") as fh:
-            text = fh.read()
+        # Read as bytes and decode rather than opening in text mode: text mode folds
+        # CRLF into LF, so len(text) would come out one byte short per line and the
+        # "(%d bytes)" below would be wrong on every NX export. latin-1 is 1 byte per
+        # character, so len(text) is then exactly the file size.
+        with open(path, "rb") as fh:
+            text = fh.read().decode("latin-1", errors="replace")
     except OSError as exc:
         print("FAIL  cannot open %s: %s" % (path, exc))
         return 1

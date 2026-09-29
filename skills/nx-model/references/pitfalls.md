@@ -172,3 +172,53 @@ imports fail. To use numpy etc. you must point NX at a matching external interpr
 `UGII_PYTHON_LIBRARY_DIR` / `UGII_PYTHONPATH`, and the **minor version must match** or you get
 "Error loading libraries needed to run a journal". For modeling work, stdlib is enough - do not
 introduce that dependency.
+
+## A run whose result file cannot be written used to exit 0
+
+`result.json` is the caller's only verdict - `run_journal.exe` turns any `sys.exit(n)` into exit 1,
+so the exit code carries no detail and an agent reads the JSON. `write_result()` removed the old file
+before renaming the new one over it, and `finish()` ignored its return value. So if the delete was
+refused (read-only directory, the `.prt` held open by the user's own NX session, a sandbox without a
+recycle bin), the OSError was swallowed, the **previous** run's `{"status": "ok"}` stayed on disk,
+and the process exited 0. The caller then reads a stale green verdict that may describe entirely
+different dimensions - the exact "it ran fine and the model is wrong" failure this skill exists to
+prevent.
+
+Fixed 2026-09-29: `os.replace()` overwrites atomically with no separate delete step, and `finish()`
+exits non-zero when the write did not land, even with a clean geometry log. Guarded by
+`tests/test_output_contract.py` (6 tests, no NX) - one of them makes the destination a *directory*,
+so it holds for any implementation that fails, not just the one that shipped.
+
+## `os.remove` refusal during the test suite aborted tests before they ran
+
+Symptom: several tests ERROR at **0.0 s** with an `OSError` from the cleanup, which reads like a
+geometry failure while nothing was actually built. The suite deletes the previous run's artefacts
+before each test precisely so a stale one cannot mask a failure, so the cleanup must not be the thing
+that breaks.
+
+Observed 2026-09-29 in a sandbox whose recycle bin is unavailable (`[safe-delete]
+[SAFE_DELETE_FAIL_CLOSED] ... windows-sandbox-recycle-bin-unavailable`); it does not reproduce in a
+normal Windows session, where `os.remove` always succeeds. Mitigated rather than merely tolerated:
+`reset_result()` now **poisons** the stale result with a `{"status": "stale"}` sentinel when the
+delete is refused (silently skipping the delete would defeat the function), `discard()` returns the
+mtime so T1 can require the file to have been *rewritten* rather than merely present, and the
+sentinel writer is itself guarded so a doubly-refused cleanup reports instead of raising. If this
+error returns, look for a new bare `os.remove` in the harness, not for a geometry bug.
+
+## `/c/Users/...` reaches Windows Python when MSYS path conversion does not run
+
+The plain-Python helpers (`check_step.py`, `show_in_nx.py`) take a path straight from `sys.argv`.
+Under Git Bash, MSYS normally rewrites a `~`-expanded argument into `C:/Users/...` and everything
+works - verified here on 2026-09-29. It goes wrong when that conversion is off: with
+`MSYS_NO_PATHCONV=1` or `MSYS2_ARG_CONV_EXCL` set, or when the argument passes through a wrapper that
+skips it, Python receives the POSIX form `/c/Users/lu/nx_out/part.step`, resolves it against the
+current drive and looks for `C:/c/Users/...`, which does not exist. The file is there; the argument is
+wrong. Reported from another environment where it did happen.
+
+Fix: pass a Windows-style path to the helpers.
+
+```bash
+python scripts/check_step.py "C:/Users/lu/nx_out/part.step"    # not ~/nx_out/part.step
+```
+
+The journals are unaffected - they expand `~` themselves through `resolve_out_dir()`.

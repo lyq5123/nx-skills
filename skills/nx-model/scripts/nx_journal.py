@@ -186,9 +186,19 @@ def chamfer_edges(part, session, edges, offset):
 # -----------------------------------------------------------------------------
 def new_metric_part(session, prt_path, log):
     """A fresh millimetre part. NewBaseDisplay refuses to overwrite an existing file."""
-    for stale in (prt_path,):
-        if os.path.exists(stale):
-            os.remove(stale)
+    if os.path.exists(prt_path):
+        try:
+            os.remove(prt_path)
+        except OSError as exc:
+            # The commonest cause by far is the user's own NX session holding the
+            # .prt open - show_in_nx.py opens it there on purpose. Name that cause
+            # instead of letting a bare PermissionError traceback be the whole story.
+            # Then re-raise: a builder cannot continue without a part, and a run that
+            # carries on would be worse than one that stops.
+            log.err("cannot overwrite the existing part %s: %s" % (prt_path, exc))
+            log.info("       if NX has it open, close it (or build under another "
+                     "part_name) and run again")
+            raise
     part = session.Parts.NewBaseDisplay(prt_path, NXOpen.BasePart.Units.Millimeters)
     if isinstance(part, tuple):          # some releases return a tuple
         part = part[0]

@@ -300,12 +300,15 @@ def write_result(path, payload):
     try:
         with open(tmp, "w", encoding="utf-8") as fh:
             json.dump(payload, fh, indent=2, ensure_ascii=False)
-        if os.path.exists(path):
-            os.remove(path)
-        os.rename(tmp, path)
+        # os.replace overwrites atomically and has no separate delete step to fail
+        # on. Removing the old file first was how a refused delete (read-only
+        # directory, the file held open by the user's NX session, a fail-closed
+        # sandbox) left the PREVIOUS run's result.json in place - see finish().
+        os.replace(tmp, path)
         return True
     except OSError as exc:
         print("[WARN] cannot write result file %s: %s" % (path, exc))
+        print("[WARN]   the run's own payload is in %s" % tmp)
         return False
 
 
@@ -314,15 +317,26 @@ def finish(log, result_path, payload, started):
 
     sys.exit(non-zero) becomes shell exit code 1 under run_journal.exe - the exact
     number is not propagated, so the result JSON carries the detail instead.
+
+    A result file that could not be written is a FAILURE even when the geometry is
+    clean, and this is why: that file is the caller's ONLY verdict (the exit code
+    carries none), so a run whose result did not land leaves an older file to be
+    read in its place. Dropping write_result's return value made exactly that
+    possible - the earlier run's "status": "ok" would pass as this one's.
     """
     payload.setdefault("warnings", list(log.warnings))
     payload["errors"] = list(log.errors)
     payload["seconds"] = round(time.time() - started, 3)
     payload["status"] = "failed" if log.errors else "ok"
-    write_result(result_path, payload)
+    wrote = write_result(result_path, payload)
     log.close()
     if log.errors:
         print("[FAIL] %d error(s) - see %s" % (len(log.errors), result_path))
+        sys.stdout.flush()
+        sys.exit(1)
+    if not wrote:
+        print("[FAIL] the result file could not be written, so this run has no "
+              "verdict: %s" % result_path)
         sys.stdout.flush()
         sys.exit(1)
     return payload

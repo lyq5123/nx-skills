@@ -341,9 +341,10 @@ quickest way to spot a missing hole.
 ## Tests
 
 ```bash
-python tests/run_tests.py          # ~7 min, needs NX installed; any Python 3
+python tests/run_tests.py          # ~10-15 min, needs NX installed; any Python 3
 python tests/run_tests.py T4        # one test by prefix
-python tests/test_recipes.py        # ~0.01 s, no NX: the recipe rules and formulas
+python tests/test_recipes.py        # ~2 s, no NX: the recipe rules and formulas
+python tests/test_output_contract.py  # ~0.02 s, no NX: what a run leaves on disk
 ```
 
 Ten tests cover the no-argument path (backward compatibility), a spec-driven build with an
