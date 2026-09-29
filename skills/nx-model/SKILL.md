@@ -131,6 +131,63 @@ there is no PIL/OpenCV/Tesseract to call, and engineering drawings carry toleran
 and GD&T that generic OCR reads unreliably. A model reads a drawing well; deterministic code should
 stay deterministic.
 
+### Looking closely at the image (the mechanics)
+
+Dimension text on a downloaded drawing is usually too small to read at the size the image arrives,
+and the machine may have **no image tooling at all** (measured here 2026-09-30: no PIL, no cv2, no
+ffmpeg, no ImageMagick - the `convert` on PATH is Windows' filesystem tool). Two routes, both with no
+extra install:
+
+**`scripts/pngcrop.py` - stdlib only, works anywhere Python does.**
+
+```bash
+python scripts/pngcrop.py in.png out.png 120 120 460 380 2   # X Y W H [SCALE]
+```
+
+It crops to that region and upscales by an integer factor, so the text can be read. What it accepts,
+measured rather than assumed:
+
+| input | result |
+| --- | --- |
+| 8-bit PNG, colour types 0/2/3/4/6 | **works** - a palette (type 3) image is expanded through its PLTE/tRNS |
+| 16-bit PNG | refused, naming the depth |
+| interlaced (Adam7) PNG | refused, naming the interlace |
+| JPEG / GIF / BMP / TIFF / PDF | refused as "not a PNG"; it never guesses |
+
+It scales by **nearest neighbour, never interpolating** - the cautious default for an image you then
+reason about. It never writes to the input file.
+
+**On Windows, PowerShell's `System.Drawing` reads, crops and scales every common format**, and its
+bicubic scaling makes small text easier to read than nearest-neighbour. Use it when the drawing is not
+a PNG, or when you want the smoother upscale:
+
+```powershell
+Add-Type -AssemblyName System.Drawing
+$src  = [System.Drawing.Image]::FromFile('C:\path\to\drawing.jpg')
+$rect = New-Object System.Drawing.Rectangle 120,120,460,380
+$dst  = New-Object System.Drawing.Bitmap 920,760
+$g = [System.Drawing.Graphics]::FromImage($dst)
+$g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+$g.DrawImage($src, (New-Object System.Drawing.Rectangle 0,0,920,760), $rect, [System.Drawing.GraphicsUnit]::Pixel)
+$g.Dispose(); $dst.Save('C:\path\to\crop.png', [System.Drawing.Imaging.ImageFormat]::Png)
+$a.Dispose(); $dst.Dispose()
+```
+
+**The discipline that matters more than the tooling:**
+
+- **Read the printed numbers, never measure the picture.** Pixel measurements mean nothing on a photo
+  (unknown scale, lens distortion) and are not much better on an isometric. Zooming is for reading
+  text; it is not a ruler.
+- **Transcribe into a table with a confidence per value**, and hand the low-confidence ones to the user
+  to confirm before building. That table is the artefact they can actually check - see the note below
+  for why the run cannot check it for you.
+- **When two readings of the same feature agree, that is the strongest evidence available.** An R25
+  outer with an R15 bore and a separately dimensioned 10 mm wall agreeing with each other is worth
+  more than either number alone; when they disagree, say so instead of quietly picking one.
+- **A drawing's own notes can contradict its dimensions.** One exercise here says "both sides similar"
+  while its two ends are R25 and R20. Record the conflict for the user rather than resolving it
+  silently in either direction.
+
 ### The blind spot you must cover yourself
 
 **The verifier cannot catch a misread dimension.** It compares what NX measured against the analytic
@@ -464,6 +521,7 @@ logical step.
 | `scripts/build_composed.py` | the executor for a feature list - multi-plane extrusions, unites and cuts, blends/chamfers by selector |
 | `scripts/verify_part.py` | measuring a finished part against its spec, whatever shape it is |
 | `scripts/show_in_nx.py` | opening the built part in the user's NX (plain Python, not a journal) |
+| `scripts/pngcrop.py` | cropping and zooming a drawing so its dimension text can be read (stdlib PNG decoder) |
 | `scripts/check_step.py` | proving a STEP export actually contains geometry |
 | `tests/run_tests.py` | regression suite; run it after any change to a script |
 | `tests/test_recipes.py` | the recipe rules and formulas, in 0.01 s, no NX needed |

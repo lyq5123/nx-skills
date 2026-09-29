@@ -281,7 +281,7 @@ def T8_recipe_unit_tests():
     journal run. Each file runs in its own process to keep its imports out of the
     harness's namespace.
     """
-    for unit_file in ("test_recipes.py", "test_output_contract.py"):
+    for unit_file in ("test_recipes.py", "test_output_contract.py", "test_pngcrop.py"):
         p = subprocess.run([sys.executable, os.path.join(HERE, unit_file)],
                            capture_output=True, text=True, cwd=HERE)
         if p.returncode != 0:
@@ -456,7 +456,7 @@ TESTS = [
     ("T5", "parameter conflicts rejected before NX is touched", T5_bad_specs_rejected),
     ("T6", "missing / malformed spec files and stray options fail clearly", T6_missing_and_malformed_spec),
     ("T7", "exported STEP contains real geometry", T7_step_contains_geometry),
-    ("T8", "unit tests: recipes + the output contract (no NX needed)",
+    ("T8", "unit tests: recipes, output contract, pngcrop (no NX needed)",
      T8_recipe_unit_tests),
     ("T9", "every registered shape builds and verifies end to end", T9_other_shapes_build_and_verify),
     ("T10", "a composed feature list builds in order, rounds included",
