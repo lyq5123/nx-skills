@@ -358,6 +358,43 @@ def T10_composed_features_build_in_order():
     check(result_of(name, verify=True)["status"] == "ok",
           "the independent verifier rejected the composed part")
 
+    # --- negative control for the SAMPLED path -------------------------------
+    # A sampled reference models no blend, so its volume check is one-sided: a
+    # round makes the part SHORT of the reference and must not be failed for it.
+    # That leaves one failure direction to test - material the part should not
+    # have. Without this, the one-sided branch would only ever run in the direction
+    # that passes, which is the "verifier that always passes" trap this suite
+    # exists to avoid.
+    #
+    # The mismatch has to come from a spec that does NOT describe the part on disk:
+    # editing the build's own spec cannot produce one, because the reference value
+    # is computed from that same spec (see the note in SKILL.md - a wrong number
+    # moves both sides together and the run stays green). So the part stays as
+    # built, with its D16 cross hole, and the verifier is handed a spec that says
+    # D30 - a bigger hole than the one in the part, so NX finds material that spec
+    # does not allow.
+    with open(spec, "r", encoding="utf-8") as fh:
+        wrong = json.load(fh)
+    for f in wrong["params"]["features"]:
+        if f.get("op") == "hole" and f.get("dia") == 16.0:
+            f["dia"] = 30.0
+    # same part_name and out_dir as the built part, so this spec resolves to the
+    # .prt that is actually on disk - the whole point is the CONTENT mismatch
+    wrong["part_name"] = name
+    wrong["out_dir"] = OUT
+    wrong_path = os.path.join(TMP, "t10_wrong_spec.json")
+    with open(wrong_path, "w", encoding="utf-8") as fh:
+        json.dump(wrong, fh, indent=2)
+
+    reset_result(name, verify=True)
+    rc, out = run("verify_part.py", [wrong_path])
+    check(rc != 0, "the verifier PASSED a part with material its spec forbids\n%s"
+                   % out[-900:])
+    check("should not have" in out,
+          "the verifier failed it for the wrong reason:\n%s" % out[-900:])
+    check(result_of(name, verify=True)["status"] != "ok",
+          "the verify result file says ok after a mismatch")
+
 
 TESTS = [
     ("T1", "build with no arguments (backward compatibility)", T1_build_default),

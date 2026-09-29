@@ -118,17 +118,26 @@ def _verify(spec, params, p, log, result):
 
         tol = nxc.part_tolerance(spec)
         if tol > 1e-6:
-            # Not a contradiction of the line above, and it must not be read as one:
-            # the reference for a feature list is SAMPLED and models no blend or
-            # chamfer, so it is a band rather than an equality. This check therefore
-            # covers the solid operations only - any round the build applied moves
-            # the measured volume DOWN inside that band, and one that failed to apply
-            # would leave the volume looking perfect. build_composed.py reports the
-            # material each round actually removed; that is where rounds are checked.
-            log.chk("  this shape's reference value is sampled and models no "
-                    "blend/chamfer: +-%.1g%% band, solid operations only"
-                    % (tol * 100.0))
-        if delta > tol * max(abs(exp_vol), 1.0):
+            # A SAMPLED reference (a composed feature list) models no blend and no
+            # chamfer, so a round can only make the measured volume SHORT of it: the
+            # comparison is one-sided by construction. Assert the side that is a real
+            # check - material the part should not have, i.e. a solid op that added
+            # too much or a cut that did not happen. A shortfall is reported and NOT
+            # failed, because build_composed.py measures the volume each round
+            # removed and fails the run when a selector matches no edge; widening the
+            # tolerance to cover the shortfall instead would swallow the real case.
+            band = tol * max(abs(exp_vol), 1.0)
+            log.chk("  this shape's reference is sampled and models no blend/chamfer: "
+                    "+-%.1g%% band, and only its UPPER side can be asserted" % (tol * 100.0))
+            if vol > exp_vol + band:
+                log.err("volume exceeds the sampled reference by %.6f, more than the "
+                        "%.1g%% band - the part has material it should not have (a cut "
+                        "that did not apply, or a feature that added too much)"
+                        % (vol - exp_vol, tol * 100.0))
+            elif vol < exp_vol - band:
+                log.chk("  %.3f short of the reference, which is what unmodelled "
+                        "rounds do; the build reports what each one removed" % (exp_vol - vol))
+        elif delta > tol * max(abs(exp_vol), 1.0):
             log.err("volume mismatch: off by %.6f mm^3, beyond the %.1g relative "
                     "agreement this shape allows" % (delta, tol))
         if exp_faces is not None and n_faces != exp_faces:
