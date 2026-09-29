@@ -444,4 +444,7 @@ you only wrote. If a feature is unverified, say so explicitly rather than implyi
 would rather hear "the fillet is unverified" than discover it later.
 
 When you hand over a `.step`, quote what `check_step.py` reported - "1 solid, 15 faces" - not just
-that the file is there.
+that the file is there. Give it a **Windows-style path** (`C:/.../part.step`): the plain-Python
+helpers take the path straight from `sys.argv`, so if MSYS path conversion is off (`MSYS_NO_PATHCONV`)
+or an argument passes through a wrapper that skips it, Windows Python receives `/c/Users/...` and
+cannot open it. The journals are unaffected - they expand `~` themselves.
