@@ -1,6 +1,6 @@
 {
   "part_name": "composed_cover",
-  "out_dir": "C:/Users/lu/nx_out",
+  "out_dir": "~/nx_out",
   "part": "composed",
   "params": {
     "features": [
