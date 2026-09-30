@@ -329,6 +329,22 @@ executed in order:
 - Face counts are **not asserted** for a composed part: there is no honest count for an arbitrary
   feature list, and a number copied from a previous run is self-consistency, not verification.
 
+**Triage the image before you read it carefully.** Three questions, in this order, because the effort
+of a careful read is wasted on a drawing that cannot be built anyway - both of the first two cases
+below were met for real on 2026-09-30:
+
+1. **Are there printed dimensions at all?** A 3D preview or a rendered view with no numbers is not a
+   drawing; say so and ask for the dimensioned sheet. One of the four exercises downloaded here (a
+   machined bracket, EXERCISE-4) had a dimensioned companion image that did not exist - only the
+   3D preview - so nothing could be built from it however long it was studied.
+2. **Is it a part, or a structure/assembly?** Plate-like components, lugs, brackets, housings and
+   covers are the target. A **structural steel frame** - beams, bracing, standard sections (HE/IPE/
+   RHS/angle) - is not, and needs two capabilities this skill does not have: swept profiles along
+   **arbitrary space directions** (a diagonal brace is not parallel to X, Y or Z, and every extrusion
+   here is axis-aligned), and modelling of a **standard section** as its own profile. One of the four
+   exercises (a "topside module structure") was exactly this and was refused before any reading work.
+3. Only then read the numbers, and keep the confidence table described above.
+
 **Say you cannot build it, before doing any work, when the part is:**
 
 - **outlined by anything other than lines and circular arcs** - a spline, an ellipse, a gear tooth, a
@@ -337,6 +353,11 @@ executed in order:
 - **revolved** - a shaft, bushing, or anything drawn as a lathe part. No recipe, and its volume needs
   a different formula.
 - **built from a swept, lofted or helical feature** - a screw thread, a spring, an impeller blade.
+- **a structural frame or a section-based assembly** - beams in standard profiles (HE, IPE, RHS,
+  angle, channel) joined node to node, with the bracing running diagonally through space. Each member
+  is a swept profile on a *sketch plane that is not one of the three global planes*, and the node
+  geometry is a layout problem of its own. This is a different tool's job (a steel-detail or
+  frame module), and saying so early is more useful than a partial model of six beams.
 - **threaded, splined, geared, or heat-treated in ways the model must show.**
 
 Adding one of those means writing a recipe (geometry formula + validation rules) plus a builder that
